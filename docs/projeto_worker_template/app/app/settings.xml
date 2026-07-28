@@ -3,51 +3,62 @@
           xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.1.0 http://maven.apache.org/xsd/settings-1.1.0.xsd"
           xmlns="http://maven.apache.org/SETTINGS/1.1.0">
 
+  <!--
+    Credenciais vem do ambiente (ARTIFACTORY_USER / ARTIFACTORY_TOKEN). Este
+    arquivo e' versionado porque o pipeline o referencia em .iupipes.yml
+    (build.settings-path), entao ele NAO pode conter segredo literal.
+
+    ATENCAO: os <id> abaixo nao casam com os <id> dos <repository> declarados em
+    <profiles> (ex.: servidor 'es8-compopen' x repositorio 'itau-comp-open-maven-repo').
+    O Maven so' aplica credenciais quando os ids sao iguais, entao boa parte
+    destes blocos nunca autentica nada. Alinhar exige validar contra o
+    Artifactory interno — nao foi alterado aqui.
+  -->
   <servers>
     <server>
       <id>painel.repodep</id>
-      <username>USER</username>
-      <password>PASS</password>
+      <username>${env.ARTIFACTORY_USER}</username>
+      <password>${env.ARTIFACTORY_TOKEN}</password>
     </server>
     <server>
       <id>es8-compopen</id>
-      <username>USER</username>
-      <password>PASS</password>
+      <username>${env.ARTIFACTORY_USER}</username>
+      <password>${env.ARTIFACTORY_TOKEN}</password>
     </server>
     <server>
       <id>itau-sg2-maven-release</id>
-      <username>USER</username>
-      <password>PASS</password>
+      <username>${env.ARTIFACTORY_USER}</username>
+      <password>${env.ARTIFACTORY_TOKEN}</password>
     </server>
     <server>
       <id>itau-sg2-maven-snapshot</id>
-      <username>USER</username>
-      <password>PASS</password>
+      <username>${env.ARTIFACTORY_USER}</username>
+      <password>${env.ARTIFACTORY_TOKEN}</password>
     </server>
     <server>
       <id>itau-ea3-maven-snapshot</id>
-      <username>USER</username>
-      <password>PASS</password>
+      <username>${env.ARTIFACTORY_USER}</username>
+      <password>${env.ARTIFACTORY_TOKEN}</password>
     </server>
     <server>
       <id>itau-ea3-maven-release</id>
-      <username>USER</username>
-      <password>PASS</password>
+      <username>${env.ARTIFACTORY_USER}</username>
+      <password>${env.ARTIFACTORY_TOKEN}</password>
     </server>
     <server>
       <id>itau-se-maven-release</id>
-      <username>USER</username>
-      <password>PASS</password>
+      <username>${env.ARTIFACTORY_USER}</username>
+      <password>${env.ARTIFACTORY_TOKEN}</password>
     </server>
     <server>
       <id>itau-se-maven-snapshot</id>
-      <username>USER</username>
-      <password>PASS</password>
+      <username>${env.ARTIFACTORY_USER}</username>
+      <password>${env.ARTIFACTORY_TOKEN}</password>
     </server>
     <server>
       <id>maven-remote-cache-server</id>
-      <username>USER</username>
-      <password>PASS</password>
+      <username>${env.ARTIFACTORY_USER}</username>
+      <password>${env.ARTIFACTORY_TOKEN}</password>
     </server>
   </servers>
 
@@ -265,7 +276,6 @@
   <activeProfiles>
     <activeProfile>artifactory</activeProfile>
     <activeProfile>es8-compopen</activeProfile>
-    <activeProfile>fe6-compopen</activeProfile>
     <activeProfile>itau-sg2-maven-release</activeProfile>
     <activeProfile>itau-sg2-maven-snapshot</activeProfile>
     <activeProfile>itau-ea3-maven-release</activeProfile>

@@ -46,6 +46,14 @@ locals {
       name  = "ENVIRONMENT"
       value = var.environment
     },
+    # Deriva a porta da aplicacao do proprio containerPort. Sem isso, server.port
+    # (application.yml) e task_container_port sao dois numeros independentes que
+    # so' coincidem por convencao — e quando divergem, o health check bate numa
+    # porta onde ninguem escuta e a task nunca fica healthy.
+    {
+      name  = "SERVER_PORT"
+      value = local.default_container_port
+    },
     {
       name  = "ECS_FARGATE"
       value = "true"
@@ -73,6 +81,10 @@ locals {
     {
       name  = "AWS_ACCOUNT_ID"
       value = data.aws_caller_identity.current.account_id
+    },
+    {
+      name  = "IDEMPOTENCIA_TABELA"
+      value = aws_dynamodb_table.idempotencia.name
     }
   ]
 
@@ -93,7 +105,9 @@ locals {
     cpuArchitecture       = "ARM64"
   }
 
-  healthcheck_path = "/actuator/health"
+  # Readiness, não o /health agregado: durante o warm-up o agregado responde DOWN e o ECS
+  # entende container morto, reiniciando em loop antes de a aplicação chegar a subir.
+  healthcheck_path = "/actuator/health/readiness"
 
   task_health_check = {
     interval    = 30

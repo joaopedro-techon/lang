@@ -1,0 +1,15 @@
+# Perfil PROD (ECS). Ver o cabeçalho de application-dev.yml — a mesma lógica se aplica.
+#
+# Log em INFO de propósito: DEBUG neste caminho imprime uma entrada por mensagem consumida, e o
+# custo de ingestão no Datadog escala junto com a profundidade da fila.
+
+app:
+  queue:
+    pedido-max-concurrent: 10
+  executor:
+    max-tarefas-em-voo: 200
+
+logging:
+  level:
+    com.itau.sg2.custodiaposvenda: INFO
+    root: WARN

@@ -1,0 +1,14 @@
+# Perfil HOM (ECS). Ver o cabeçalho de application-dev.yml — a mesma lógica se aplica.
+#
+# HOM deve espelhar PROD o mais perto possível: é onde o comportamento sob carga é validado antes
+# do release. Divergir daqui tira o sentido do teste.
+
+app:
+  queue:
+    pedido-max-concurrent: 10
+  executor:
+    max-tarefas-em-voo: 100
+
+logging:
+  level:
+    com.itau.sg2.custodiaposvenda: INFO

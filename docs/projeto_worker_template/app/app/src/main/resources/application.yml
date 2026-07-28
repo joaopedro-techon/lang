@@ -1,11 +1,22 @@
 server:
   port: ${SERVER_PORT:8006}
+  # Sem isto o SIGTERM do ECS mata o processo com tarefas em voo. A cadeia de tempos precisa ser
+  # crescente: executor (20s) < timeout-per-shutdown-phase (25s) < stopTimeout da task ECS (30s).
+  shutdown: graceful
 
 spring:
   application:
     name: ${APPLICATION_NAME:msdemoworker}
   profiles:
     active: ${ENVIRONMENT:local}
+  lifecycle:
+    timeout-per-shutdown-phase: ${SHUTDOWN_TIMEOUT:25s}
+  threads:
+    virtual:
+      # Ligado: sob Java 25, o listener do SQS deixa de bloquear threads de plataforma no
+      # .join() do publicador. Estava desligado enquanto a aplicação criava virtual threads
+      # à mão para a auditoria — meio caminho, com o custo dos dois modelos.
+      enabled: ${VIRTUAL_THREADS_ENABLED:true}
   cloud:
     vault:
       enabled: false
@@ -30,14 +41,35 @@ spring:
 app:
   sigla-app: SG2-A11
   queue:
+    # PRÉ-REQUISITO DE INFRAESTRUTURA (Terraform, fora deste repositório):
+    # a fila 'pedido' DEVE ter redrivePolicy com maxReceiveCount e deadLetterTargetArn.
+    # A aplicação não roteia nada para DLQ — ela apenas deixa de confirmar a mensagem em caso de
+    # falha, e é a redrivePolicy que encerra o ciclo. Sem ela, uma mensagem que sempre falha
+    # é reentregue indefinidamente.
     pedido: ${SQS_PEDIDO_QUEUE:pedido_queue}
     pedido-max-concurrent: ${SQS_PEDIDO_MAX_CONCURRENT:10}
     publicacao-sqs: ${SQS_PUBLICACAO_QUEUE:publicacao_queue}
   auditoria:
     ativa: ${AUDITORIA_ATIVA:true}
+  idempotencia:
+    # SQS é at-least-once. Sem isto, toda reentrega vira publicação duplicada no destino.
+    ativa: ${IDEMPOTENCIA_ATIVA:true}
+    tabela: ${IDEMPOTENCIA_TABELA:msdemoworker-idempotencia}
+    # Precisa cobrir a janela em que uma duplicata ainda pode chegar: retention da fila mais
+    # as reentregas até a DLQ.
+    ttl-horas: ${IDEMPOTENCIA_TTL_HORAS:72}
+    # Maior que o pior tempo de processamento, menor que o visibility timeout da fila.
+    ttl-em-andamento-segundos: ${IDEMPOTENCIA_TTL_EM_ANDAMENTO:300}
+  executor:
+    # Teto de tarefas assíncronas em voo. Ao atingi-lo o produtor bloqueia — é o que impede
+    # que um Firehose lento acumule tarefas sem limite enquanto o listener segue consumindo.
+    max-tarefas-em-voo: ${EXECUTOR_MAX_TAREFAS_EM_VOO:100}
+    timeout-encerramento-segundos: ${EXECUTOR_TIMEOUT_ENCERRAMENTO:20}
   firehose:
     delivery-stream-name: ${FIREHOSE_DELIVERY_STREAM_NAME:pedido-stream}
     auditoria-delivery-stream-name: ${FIREHOSE_AUDITORIA_DELIVERY_STREAM_NAME:auditoria-stream}
+    max-tentativas: ${FIREHOSE_MAX_TENTATIVAS:3}
+    backoff-inicial-ms: ${FIREHOSE_BACKOFF_INICIAL_MS:200}
   logging:
     logger-name: ${LOGGER_NAME:com.itau.sg2.custodiaposvenda}
     application-name: ${APPLICATION_NAME:msdemoworker}
@@ -48,13 +80,25 @@ app:
 management:
   endpoints:
     web:
-      
       exposure:
         include: health,info,metrics,prometheus
         exclude: autoconfig,beans,configprops,dump,env,mappings,shutdown,trace
       base-path: /actuator
       path-mapping:
         health: health
+  endpoint:
+    health:
+      # Separa "estou vivo" de "posso receber tráfego". Sem os grupos, o health check do ECS usa
+      # um /health agregado: durante o warm-up ele responde DOWN, o orquestrador entende como
+      # container morto e reinicia — em loop, sem a aplicação nunca ter chegado a subir.
+      probes:
+        enabled: true
+      group:
+        liveness:
+          include: livenessState
+        readiness:
+          include: readinessState
+      show-details: never
   metrics:
     distribution:
       percentiles-histogram:

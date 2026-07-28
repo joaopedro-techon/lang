@@ -5,8 +5,10 @@ import com.itau.sg2.custodiaposvenda.domain.pedido.Pedido;
 import com.itau.sg2.custodiaposvenda.domain.pedido.enums.Fluxo;
 import com.itau.sg2.custodiaposvenda.infrastructure.config.AppProperties;
 import com.itau.sg2.custodiaposvenda.infrastructure.config.QueueProperties;
-import com.itau.sg2.custodiaposvenda.infrastructure.logging.Logger;
-import com.itau.sg2.custodiaposvenda.infrastructure.logging.MdcHelper;
+import com.itau.sg2.custodiaposvenda.shared.logging.Logger;
+import com.itau.sg2.custodiaposvenda.shared.logging.MdcHelper;
+import com.itau.sg2.custodiaposvenda.shared.logging.MdcKeys;
+import com.itau.sg2.custodiaposvenda.shared.logging.PayloadLog;
 import io.awspring.cloud.sqs.operations.SqsTemplate;
 import org.springframework.stereotype.Component;
 
@@ -39,10 +41,11 @@ public class SqsPublicador implements PublicadorMensagemPort {
         sqsTemplate.send(to -> to
                 .queue(queueName)
                 .payload(pedido)
-                .header(HEADER_CORRELATION_ID, MdcHelper.mdcOrNew("CorrelationId"))
-                .header(HEADER_TRANSACTION_ID, MdcHelper.mdcOrNew("TransactionId"))
+                .header(HEADER_CORRELATION_ID, MdcHelper.mdcOrNew(MdcKeys.CORRELATION_ID))
+                .header(HEADER_TRANSACTION_ID, MdcHelper.mdcOrNew(MdcKeys.TRANSACTION_ID))
                 .header(HEADER_SIGLA_APP_ORIGEM, appProperties.getSiglaApp()));
 
-        Logger.info("Mensagem publicada na fila SQS. queue=" + queueName, pedido);
+        Logger.info("Mensagem publicada na fila SQS",
+                PayloadLog.de("idOperacao", pedido.idOperacao()).e("queue", queueName));
     }
 }

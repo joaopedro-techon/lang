@@ -1,7 +1,7 @@
 package com.itau.sg2.custodiaposvenda.infrastructure.adapters.outbound;
 
 import com.itau.sg2.custodiaposvenda.application.ports.outbound.PublicadorAuditoriaPort;
-import com.itau.sg2.custodiaposvenda.infrastructure.logging.Logger;
+import com.itau.sg2.custodiaposvenda.shared.logging.Logger;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -24,7 +24,7 @@ public class FirehosePublicadorAuditoria implements PublicadorAuditoriaPort {
             return;
         }
 
-        firehoseBatchClient.enviar(firehoseProperties.getAuditoriaDeliveryStreamName(), eventos).join();
+        firehoseBatchClient.enviarSincrono(firehoseProperties.getAuditoriaDeliveryStreamName(), eventos);
 
         Logger.info("Eventos de auditoria publicados no Firehose. quantidade=" + eventos.size());
     }

@@ -1,4 +1,4 @@
-package com.itau.sg2.custodiaposvenda.infrastructure.logging;
+package com.itau.sg2.custodiaposvenda.shared.logging;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -45,8 +45,9 @@ public class Log {
     @JsonProperty("LogMessage")
     private String logMessage;
 
+    /** Ver {@link PayloadLog} — tipado de propósito, para não aceitar objeto de domínio inteiro. */
     @JsonProperty("Payload")
-    private Object payload;
+    private PayloadLog payload;
 
     @JsonProperty("ThrownException")
     private String thrownException;
@@ -106,9 +107,9 @@ public class Log {
 
     public void setLogMessage(String logMessage) { this.logMessage = logMessage; }
 
-    public Object getPayload() { return payload; }
+    public PayloadLog getPayload() { return payload; }
 
-    public void setPayload(Object payload) { this.payload = payload; }
+    public void setPayload(PayloadLog payload) { this.payload = payload; }
 
     public String getThrownException() { return thrownException; }
 

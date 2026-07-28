@@ -1,0 +1,13 @@
+# Revisores obrigatórios por caminho.
+# Substituir o time abaixo pelo handle real antes de usar em um projeto gerado.
+
+*                       @itau-corp/sg2-custodia-pos-venda
+
+# Infra e pipeline mudam ambiente e custo — revisão do time de plataforma.
+/infra/                 @itau-corp/sg2-custodia-pos-venda @itau-corp/sg2-plataforma
+/.iupipes.yml           @itau-corp/sg2-custodia-pos-venda @itau-corp/sg2-plataforma
+/app/Dockerfile         @itau-corp/sg2-custodia-pos-venda @itau-corp/sg2-plataforma
+/app/settings.xml       @itau-corp/sg2-custodia-pos-venda @itau-corp/sg2-plataforma
+
+# ADRs registram decisão de arquitetura: mudança aqui é mudança de rumo, não de código.
+/docs/adr/              @itau-corp/sg2-custodia-pos-venda

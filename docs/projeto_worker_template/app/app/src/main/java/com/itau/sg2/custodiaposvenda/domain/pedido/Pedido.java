@@ -2,54 +2,32 @@ package com.itau.sg2.custodiaposvenda.domain.pedido;
 
 import com.itau.sg2.custodiaposvenda.domain.pedido.enums.Fluxo;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.Objects;
 
-public class Pedido {
+/**
+ * Pedido pronto para publicação.
+ * <p>
+ * Virou {@code record}. A versão anterior era uma classe mutável com {@code marcarComoProcessado()}
+ * alterando um estado (`processado`, `processadoEm`) que ninguém lia — a instância era descartada
+ * logo em seguida — e com {@code equals}/{@code hashCode} escritos à mão e nunca usados. Estado
+ * que não é lido não é modelagem: é ruído que sugere um ciclo de vida inexistente.
+ * <p>
+ * {@code criadoEm} chega por parâmetro, vindo de um {@link java.time.Clock} injetado, em vez de um
+ * {@code LocalDateTime.now()} interno. Sem isso não há como escrever um teste determinístico sobre
+ * o payload publicado. É {@link Instant}, e não {@code LocalDateTime}, porque o valor cruza a
+ * fronteira do processo — sem fuso, o consumidor não sabe o que recebeu.
+ */
+public record Pedido(Long idOperacao, Fluxo fluxo, Instant criadoEm) {
 
-    private final Long idOperacao;
-    private final Fluxo fluxo;
-    private final LocalDateTime criadoEm;
-    private boolean processado;
-    private LocalDateTime processadoEm;
-
-    private Pedido(Long idOperacao, Fluxo fluxo) {
-        this.idOperacao = idOperacao;
-        this.fluxo = fluxo;
-        this.criadoEm = LocalDateTime.now();
-        this.processado = false;
+    public Pedido {
+        Objects.requireNonNull(idOperacao, "idOperacao não pode ser nulo");
+        Objects.requireNonNull(fluxo, "fluxo não pode ser nulo");
+        Objects.requireNonNull(criadoEm, "criadoEm não pode ser nulo");
     }
 
-    public static Pedido from(PedidoEvent event) {
+    public static Pedido de(PedidoEvent event, Instant criadoEm) {
         Objects.requireNonNull(event, "event não pode ser nulo");
-        return new Pedido(event.idOperacao(), event.fluxo());
+        return new Pedido(event.idOperacao(), event.fluxo(), criadoEm);
     }
-
-    public void marcarComoProcessado() {
-        if (this.processado) {
-            throw new IllegalStateException("Pedido " + idOperacao + " já foi processado");
-        }
-        this.processado = true;
-        this.processadoEm = LocalDateTime.now();
-    }
-
-    public boolean isProcessado() { return processado; }
-
-    public Long getIdOperacao() { return idOperacao; }
-
-    public Fluxo getFluxo() { return fluxo; }
-
-    public LocalDateTime getCriadoEm() { return criadoEm; }
-
-    public LocalDateTime getProcessadoEm() { return processadoEm; }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof Pedido pedido)) return false;
-        return Objects.equals(idOperacao, pedido.idOperacao);
-    }
-
-    @Override
-    public int hashCode() { return Objects.hash(idOperacao); }
 }

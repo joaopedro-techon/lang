@@ -1,6 +1,5 @@
 ############## definições basicas do service
 environment = "hom"
-datadog_env = "hom"
 
 ecs_cluster_name = "ecs-cluster"
 

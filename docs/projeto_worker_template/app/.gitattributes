@@ -1,0 +1,23 @@
+# Normalização de fim de linha para o repositório inteiro.
+#
+# Com core.autocrlf=true (default de muitas instalações Windows), o git converte LF em CRLF no
+# checkout. Um script .sh com CRLF falha dentro de um container Linux com um erro obscuro —
+# `$'\r': command not found` — que não aponta para a causa. O mesmo vale para o Dockerfile e para
+# os arquivos consumidos por ferramentas Linux no pipeline.
+
+* text=auto
+
+*.sh    text eol=lf
+Dockerfile text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.tf    text eol=lf
+*.tfvars text eol=lf
+
+*.cmd   text eol=crlf
+*.bat   text eol=crlf
+
+*.jar   binary
+*.jpeg  binary
+*.jpg   binary
+*.png   binary

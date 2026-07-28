@@ -83,7 +83,11 @@ quality:
   sonar:
     language: java-maven         # A linguagem que será feita a análise de código
     working-directory: 'app/'    # O path que se encontra o projeto
-    projectPropertiesPath: 'app/' # O path que se encontra o arquivo sonar-project.properties
+    # Vazio de propósito: em java-maven a configuração do Sonar vem do pom.xml
+    # (sonar.exclusions, sonar.coverage.exclusions e o relatório do JaCoCo).
+    # Apontava para 'app/', onde nunca existiu um sonar-project.properties.
+    # Manter as duas fontes conviveria com divergência silenciosa entre elas.
+    projectPropertiesPath: ''    # O path que se encontra o arquivo sonar-project.properties
     gate-name: 'Sonar-90'        # Quality Gate utilizado na análise
     parameters: ''               # Parametros adicionais para o build Ex. -Dsonar.projectKey=myproject
 

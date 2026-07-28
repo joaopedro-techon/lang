@@ -1,6 +1,5 @@
 ############## definições basicas do service
 environment = "prod"
-datadog_env = "prod"
 
 ecs_cluster_name = "ecs-cluster"
 

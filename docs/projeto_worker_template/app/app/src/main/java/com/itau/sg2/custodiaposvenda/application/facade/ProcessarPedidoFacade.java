@@ -1,77 +1,121 @@
 package com.itau.sg2.custodiaposvenda.application.facade;
 
 import com.itau.sg2.custodiaposvenda.application.ports.inbound.ProcessarPedidoUseCasePort;
+import com.itau.sg2.custodiaposvenda.application.ports.outbound.AuditoriaPort;
+import com.itau.sg2.custodiaposvenda.application.ports.outbound.ExecutorAssincronoPort;
+import com.itau.sg2.custodiaposvenda.application.ports.outbound.IdempotenciaPort;
+import com.itau.sg2.custodiaposvenda.application.ports.outbound.MetricasPort;
 import com.itau.sg2.custodiaposvenda.application.ports.outbound.PublicadorAuditoriaPort;
-import com.itau.sg2.custodiaposvenda.domain.auditoria.AuditoriaContext;
-import com.itau.sg2.custodiaposvenda.domain.auditoria.AuditoriaContext.ParametrosAuditoria;
+import com.itau.sg2.custodiaposvenda.domain.auditoria.EventoAuditoria;
+import com.itau.sg2.custodiaposvenda.domain.auditoria.ParametrosAuditoria;
 import com.itau.sg2.custodiaposvenda.domain.auditoria.SituacaoAuditoria;
 import com.itau.sg2.custodiaposvenda.domain.pedido.PedidoEvent;
-import com.itau.sg2.custodiaposvenda.infrastructure.config.MdcAwareExecutor;
-import com.itau.sg2.custodiaposvenda.infrastructure.config.MetricsConfig;
-import com.itau.sg2.custodiaposvenda.infrastructure.logging.Logger;
-import org.springframework.beans.factory.annotation.Value;
+import com.itau.sg2.custodiaposvenda.shared.logging.Logger;
+import com.itau.sg2.custodiaposvenda.shared.logging.PayloadLog;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
 import java.util.Map;
 
-import static com.itau.sg2.custodiaposvenda.infrastructure.config.MetricsConfig.METRIC_PEDIDO_PROCESSADO;
-import static com.itau.sg2.custodiaposvenda.infrastructure.config.MetricsConfig.METRIC_TEMPO_PROCESSAMENTO;
-import static com.itau.sg2.custodiaposvenda.infrastructure.config.MetricsConfig.STATUS_ERRO;
-import static com.itau.sg2.custodiaposvenda.infrastructure.config.MetricsConfig.STATUS_SUCESSO;
-import static com.itau.sg2.custodiaposvenda.infrastructure.config.MetricsConfig.TAG_FLUXO;
-import static com.itau.sg2.custodiaposvenda.infrastructure.config.MetricsConfig.TAG_STATUS;
-
+/**
+ * Orquestra o processamento de uma mensagem: métrica, auditoria e caso de uso.
+ * <p>
+ * Depende apenas de portas. Antes importava {@code MetricsConfig}, {@code MdcAwareExecutor} e o
+ * {@code Logger} de {@code infrastructure} — a camada de dentro conhecendo a de fora, que é a
+ * inversão exata da regra que o hexagonal existe para impor.
+ */
 @Component
 public class ProcessarPedidoFacade {
 
     private final ProcessarPedidoUseCasePort processarPedidoUseCase;
     private final PublicadorAuditoriaPort publicadorAuditoria;
-    private final MdcAwareExecutor mdcAwareExecutor;
-    private final MetricsConfig metrics;
-    private final boolean auditoriaAtiva;
+    private final AuditoriaPort auditoria;
+    private final ExecutorAssincronoPort executor;
+    private final MetricasPort metricas;
+    private final IdempotenciaPort idempotencia;
 
     public ProcessarPedidoFacade(ProcessarPedidoUseCasePort processarPedidoUseCase,
                                  PublicadorAuditoriaPort publicadorAuditoria,
-                                 MdcAwareExecutor mdcAwareExecutor,
-                                 MetricsConfig metrics,
-                                 @Value("${app.auditoria.ativa:true}") boolean auditoriaAtiva) {
+                                 AuditoriaPort auditoria,
+                                 ExecutorAssincronoPort executor,
+                                 MetricasPort metricas,
+                                 IdempotenciaPort idempotencia) {
         this.processarPedidoUseCase = processarPedidoUseCase;
         this.publicadorAuditoria = publicadorAuditoria;
-        this.mdcAwareExecutor = mdcAwareExecutor;
-        this.metrics = metrics;
-        this.auditoriaAtiva = auditoriaAtiva;
+        this.auditoria = auditoria;
+        this.executor = executor;
+        this.metricas = metricas;
+        this.idempotencia = idempotencia;
+    }
+
+    /**
+     * A chave inclui o fluxo, e não apenas o {@code idOperacao}: a mesma operação pode
+     * legitimamente ser publicada em fluxos diferentes, e usar só o id faria a segunda ser
+     * descartada como duplicata.
+     */
+    private static String chaveIdempotencia(PedidoEvent event) {
+        return "pedido#" + event.idOperacao() + "#" + event.fluxo().name();
     }
 
     public void executar(PedidoEvent event) {
-        metrics.getTimer(METRIC_TEMPO_PROCESSAMENTO, TAG_FLUXO, event.fluxo().name()).record(() -> {
+        String fluxo = event.fluxo().name();
+        String chave = chaveIdempotencia(event);
+
+        // Fora do timer: uma duplicata descartada não é um processamento, e contá-la distorceria
+        // a distribuição de latência.
+        if (!idempotencia.tentarIniciar(chave)) {
+            metricas.incrementarContador(MetricasPort.PEDIDO_PROCESSADO,
+                    MetricasPort.TAG_FLUXO, fluxo,
+                    MetricasPort.TAG_STATUS, MetricasPort.STATUS_DUPLICADO);
+            return;
+        }
+
+        metricas.registrarTempo(MetricasPort.TEMPO_PROCESSAMENTO, () -> {
 
             try {
-                AuditoriaContext.iniciar(auditoriaAtiva, event.idOperacao());
+                auditoria.iniciar(event.idOperacao());
 
-                AuditoriaContext.registrar(() -> new ParametrosAuditoria(SituacaoAuditoria.EVENTO_RECEBIDO));
+                auditoria.registrar(() -> new ParametrosAuditoria(SituacaoAuditoria.EVENTO_RECEBIDO));
 
                 processarPedidoUseCase.executar(event);
 
-                AuditoriaContext.registrar(() -> new ParametrosAuditoria(SituacaoAuditoria.EVENTO_PROCESSADO_SUCESSO));
+                // Só depois da publicação ter dado certo. Concluir antes faria uma falha posterior
+                // deixar a chave marcada como definitiva, e a reentrega seria descartada.
+                idempotencia.concluir(chave);
 
-                metrics.incrementCounter(METRIC_PEDIDO_PROCESSADO, TAG_FLUXO, event.fluxo().name(), TAG_STATUS, STATUS_SUCESSO);
+                auditoria.registrar(() -> new ParametrosAuditoria(SituacaoAuditoria.EVENTO_PROCESSADO_SUCESSO));
 
-                Logger.info("Pedido processado com sucesso. fluxo=" + event.fluxo().name());
+                metricas.incrementarContador(MetricasPort.PEDIDO_PROCESSADO,
+                        MetricasPort.TAG_FLUXO, fluxo,
+                        MetricasPort.TAG_STATUS, MetricasPort.STATUS_SUCESSO);
+
+                Logger.info("Pedido processado com sucesso",
+                        PayloadLog.de("idOperacao", event.idOperacao()).e("fluxo", fluxo));
             } catch (Exception ex) {
-                AuditoriaContext.registrar(() -> new ParametrosAuditoria(
+                // Sem isto, a mensagem some: a reentrega encontraria a chave marcada, seria
+                // tratada como duplicata e descartada — sem DLQ, sem erro, sem métrica.
+                idempotencia.liberar(chave);
+
+                auditoria.registrar(() -> new ParametrosAuditoria(
                         SituacaoAuditoria.EVENTO_PROCESSADO_ERRO,
                         Map.of("erro", ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName())
                 ));
 
-                metrics.incrementCounter(METRIC_PEDIDO_PROCESSADO, TAG_FLUXO, event.fluxo().name(), TAG_STATUS, STATUS_ERRO);
+                metricas.incrementarContador(MetricasPort.PEDIDO_PROCESSADO,
+                        MetricasPort.TAG_FLUXO, fluxo,
+                        MetricasPort.TAG_STATUS, MetricasPort.STATUS_ERRO);
 
-                Logger.error("Erro ao processar pedido. fluxo=" + event.fluxo().name(), event, ex);
+                Logger.error("Erro ao processar pedido",
+                        PayloadLog.de("idOperacao", event.idOperacao()).e("fluxo", fluxo), ex);
 
                 throw ex;
             } finally {
-                mdcAwareExecutor.execute(() -> publicadorAuditoria.publicar(AuditoriaContext.obterEventos()));
-                AuditoriaContext.limpar();
+                // Os eventos vivem em ThreadLocal: precisam ser drenados AQUI, na thread que os
+                // produziu. Drenar dentro do lambda executaria na virtual thread, onde o
+                // ThreadLocal está vazio, e a auditoria seria silenciosamente descartada.
+                List<EventoAuditoria> eventos = auditoria.drenar();
+                executor.executar(() -> publicadorAuditoria.publicar(eventos));
             }
-        });
+        }, MetricasPort.TAG_FLUXO, fluxo);
     }
 }

@@ -1,19 +1,24 @@
-package com.itau.sg2.custodiaposvenda.infrastructure.logging;
+package com.itau.sg2.custodiaposvenda.infrastructure.config;
 
-import jakarta.annotation.PostConstruct;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+/**
+ * Identificação da aplicação nos campos fixos do log.
+ * <p>
+ * Só carrega valores. A versão anterior era um {@code @ConfigurationProperties} que disparava
+ * {@code Logger.configure(...)} no próprio {@code @PostConstruct} — um objeto de configuração
+ * causando efeito colateral global no momento em que era populado. Quem lesse a classe procurando
+ * "que propriedades existem" não esperava encontrar ali a inicialização do log. O efeito agora
+ * está em {@link LoggingConfig}.
+ */
 @ConfigurationProperties(prefix = "app.logging")
-public class LoggerConfig {
+public class LoggingProperties {
 
     private String loggerName;
     private String applicationName;
     private String serviceId;
     private String sigla;
     private String domain;
-
-    @PostConstruct
-    void init() { Logger.configure(loggerName, applicationName, serviceId, sigla, domain); }
 
     public String getLoggerName() { return loggerName; }
 
