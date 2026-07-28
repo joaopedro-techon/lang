@@ -1,0 +1,41 @@
+# Contexto do docker build = raiz do repositorio (o Dockerfile fica em app/ e
+# faz COPY app/*.jar). Tudo que nao for o jar so' engorda o contexto enviado ao
+# daemon — e qualquer arquivo aqui pode acabar numa imagem por engano.
+
+# Controle de versao
+.git
+.gitignore
+.gitattributes
+
+# Infra e pipeline (nao vao para a imagem)
+infra/
+.iupipes.yml
+
+# Ambiente de desenvolvimento local
+docker-compose.yml
+localstack/
+
+# Fontes e build do Maven: a imagem recebe o jar ja' pronto do pipeline
+app/src/
+app/target/
+app/.mvn/
+app/mvnw
+app/mvnw.cmd
+app/pom.xml
+
+# Credenciais de build — nunca devem entrar no contexto
+app/settings.xml
+
+# IDEs
+.idea/
+.vscode/
+*.iml
+*.iws
+*.ipr
+.classpath
+.project
+.settings/
+
+# Documentacao e material auxiliar
+*.md
+auxiliar_template/

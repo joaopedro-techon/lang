@@ -1,0 +1,99 @@
+server:
+  port: ${SERVER_PORT:8006}
+  # Sem isto o SIGTERM do ECS mata o processo com mensagens em voo. A cadeia de tempos precisa ser
+  # crescente: timeout-per-shutdown-phase (25s) < stopTimeout da task ECS (30s).
+  shutdown: graceful
+
+spring:
+  application:
+    name: ${APPLICATION_NAME:msdemoworker}
+  profiles:
+    active: ${ENVIRONMENT:local}
+  lifecycle:
+    timeout-per-shutdown-phase: ${SHUTDOWN_TIMEOUT:25s}
+  threads:
+    virtual:
+      # Ligado: a publicação é uma chamada de rede bloqueante por mensagem. Sob virtual threads ela
+      # não segura thread de plataforma, e é o que permite usar clientes AWS síncronos — bem mais
+      # simples de ler — sem pagar em concorrência.
+      enabled: ${VIRTUAL_THREADS_ENABLED:true}
+  cloud:
+    vault:
+      enabled: false
+    aws:
+      region:
+        static: ${AWS_REGION:sa-east-1}
+    openfeign:
+      httpclient:
+        hc5:
+          enabled: true
+        max-connections: 250
+        max-connections-per-route: 125
+        connection-timeout: 3000
+        connection-request-timeout: 3000
+        time-to-live: 30
+      client:
+        config:
+          default:
+            connect-timeout: 3000
+            read-timeout: 3000
+
+app:
+  sigla-app: SG2-A11
+  queue:
+    # PRÉ-REQUISITO DE INFRAESTRUTURA (Terraform, fora deste repositório):
+    # a fila 'pedido' DEVE ter redrivePolicy com maxReceiveCount e deadLetterTargetArn.
+    # A aplicação não roteia nada para DLQ — ela apenas deixa de confirmar a mensagem em caso de
+    # falha, e é a redrivePolicy que encerra o ciclo. Sem ela, uma mensagem que sempre falha
+    # é reentregue indefinidamente. Ver ADR-0001.
+    pedido: ${SQS_PEDIDO_QUEUE:pedido_queue}
+    pedido-max-concurrent: ${SQS_PEDIDO_MAX_CONCURRENT:10}
+    # Fila de SAÍDA do fluxo PUBLICA_SQS. Precisa ser diferente da fila de entrada: publicar de
+    # volta na mesma fila cria um laço em que cada mensagem se reproduz.
+    publicacao-sqs: ${SQS_PUBLICACAO_QUEUE:publicacao_queue}
+  sns:
+    # ARN completo, não o nome do tópico — ver javadoc de SnsPublicador.
+    topico-pedido: ${SNS_PEDIDO_TOPIC_ARN:arn:aws:sns:us-east-1:000000000000:pedido_topic}
+  firehose:
+    delivery-stream-name: ${FIREHOSE_DELIVERY_STREAM_NAME:pedido-stream}
+  logging:
+    logger-name: ${LOGGER_NAME:com.itau.sg2.custodiaposvenda}
+    application-name: ${APPLICATION_NAME:msdemoworker}
+    service-id: ${SERVICE_ID:msdemoworker}
+    sigla: ${SIGLA:SG2}
+    domain: ${DOMAIN:custodia-pos-venda}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+        exclude: autoconfig,beans,configprops,dump,env,mappings,shutdown,trace
+      base-path: /actuator
+      path-mapping:
+        health: health
+  endpoint:
+    health:
+      # Separa "estou vivo" de "posso receber tráfego". Sem os grupos, o health check do ECS usa
+      # um /health agregado: durante o warm-up ele responde DOWN, o orquestrador entende como
+      # container morto e reinicia — em loop, sem a aplicação nunca ter chegado a subir.
+      probes:
+        enabled: true
+      group:
+        liveness:
+          include: livenessState
+        readiness:
+          include: readinessState
+      show-details: never
+  metrics:
+    distribution:
+      percentiles-histogram:
+        "[custom.sg2.dogstatsd.app.pedido.processamento.duration]": true
+  statsd:
+    metrics:
+      export:
+        flavor: datadog
+        enabled: true
+        host: ${STATSD_HOST:localhost}
+        port: ${STATSD_PORT:8125}
+        protocol: udp

@@ -1,0 +1,386 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.0.5</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.itau.sg2.custodiaposvenda</groupId>
+    <artifactId>msdemoworker</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <name>msdemoworker</name>
+    <description>Worker de exemplo: consome uma fila SQS e publica no destino do fluxo da mensagem (SNS, SQS ou Firehose)</description>
+
+    <properties>
+        <java.version>25</java.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+        <maven.compiler.source>${java.version}</maven.compiler.source>
+        <maven.compiler.target>${java.version}</maven.compiler.target>
+
+        <!-- AWS. As versões dos artefatos do SDK vêm do BOM importado abaixo. -->
+        <spring-cloud.version>2025.1.1</spring-cloud.version>
+        <spring-cloud-aws.version>4.0.0</spring-cloud-aws.version>
+        <aws-sdk.version>2.31.16</aws-sdk.version>
+
+        <!--
+            Test. 'localstack.version' foi removida: duplicava 'testcontainers.version' com o
+            mesmo valor para artefatos do mesmo BOM — quando um fosse atualizado e o outro não,
+            o conflito apareceria como erro de runtime nos testes.
+        -->
+        <testcontainers.version>1.20.6</testcontainers.version>
+
+        <!--
+            Quality.
+
+            ATENÇÃO: 'jacoco.version' é ACOPLADA a 'java.version'. O JaCoCo instrumenta bytecode e
+            recusa um class file major version que não conhece — Java 25 gera major 69, e o
+            0.8.12 (março/2024) para no 22. O sintoma é opaco:
+
+              Unsupported class file major version 69
+
+            O Spring Boot 4.0.5 NÃO gerencia esta versão (conferido em spring-boot-dependencies),
+            então ela precisa ser pinada aqui e revista a cada bump de JDK.
+
+            Referência: 0.8.12 → Java 22, 0.8.13 → Java 24, 0.8.14 → Java 25.
+        -->
+        <jacoco.version>0.8.14</jacoco.version>
+        <jacoco.cobertura.minima>0.00</jacoco.cobertura.minima>
+        <sonar.exclusions>**/DemoApplication.java</sonar.exclusions>
+        <sonar.coverage.exclusions>**/DemoApplication.java</sonar.coverage.exclusions>
+
+        <!-- Build plugins -->
+        <maven-enforcer.version>3.5.0</maven-enforcer.version>
+        <cyclonedx.version>2.9.1</cyclonedx.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.cloud</groupId>
+                <artifactId>spring-cloud-dependencies</artifactId>
+                <version>${spring-cloud.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>io.awspring.cloud</groupId>
+                <artifactId>spring-cloud-aws-dependencies</artifactId>
+                <version>${spring-cloud-aws.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>software.amazon.awssdk</groupId>
+                <artifactId>bom</artifactId>
+                <version>${aws-sdk.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <!--
+            Spring Boot Core.
+            'spring-boot-starter' não é declarado: vem transitivamente de '-web', que o inclui.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
+        <!-- Spring Cloud AWS - SQS (consumo da fila de entrada e publicação no fluxo PUBLICA_SQS) -->
+        <dependency>
+            <groupId>io.awspring.cloud</groupId>
+            <artifactId>spring-cloud-aws-starter-sqs</artifactId>
+        </dependency>
+
+        <!-- Spring Cloud AWS - SNS (fluxo PUBLICA_SNS, via SnsTemplate) -->
+        <dependency>
+            <groupId>io.awspring.cloud</groupId>
+            <artifactId>spring-cloud-aws-starter-sns</artifactId>
+        </dependency>
+
+        <!-- AWS SDK v2 - Firehose (não tem starter Spring Cloud AWS) -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>firehose</artifactId>
+        </dependency>
+
+        <!--
+            REMOVIDOS por não terem uso algum no código:
+              - software.amazon.awssdk:dynamodb
+              - spring-cloud-aws-starter-dynamodb
+
+            O worker não persiste nada: o pedido chega inteiro na mensagem e sai para o destino do
+            seu fluxo. Reintroduzir junto com o primeiro repositório de verdade — como porta em
+            application/ports/outbound e adaptador em infrastructure, nunca com o cliente enhanced
+            anotando o record de domínio.
+        -->
+
+        <!--
+            REMOVIDO: aws-crt-client. Existia para o FirehoseAsyncClient; com os clientes de
+            DynamoDB e Firehose síncronos (o worker precisa do resultado imediatamente, e as
+            virtual threads tornam o bloqueio barato), nada mais o referenciava. Num template
+            replicado por um gerador, dependência morta é copiada para todo projeto derivado e
+            entra na superfície de CVE de cada um.
+        -->
+
+        <!--
+            Jackson.
+
+            A stack JSON da aplicação é o Jackson 3 (tools.jackson), que vem do
+            spring-boot-starter-json via -web. Não é declarada aqui: quem a configura é o
+            JacksonConfig, e quem a consome são os conversores de mensagem de SQS e SNS e a
+            serialização do record do Firehose.
+
+            O Jackson 2 (com.fasterxml.jackson) continua no classpath como dependência
+            transitiva do logstash-logback-encoder, que serializa os logs — e apenas para isso.
+            Declarado explicitamente por ser um requisito real e não óbvio: sem ele o encoder
+            de log não funciona, e nada no código da aplicação o referencia para denunciar.
+
+            Os antigos jackson-datatype-jsr310 e jackson-datatype-jdk8 foram removidos: existiam
+            para o ObjectMapper do Jackson 2 que o JacksonConfig criava. No Jackson 3 o suporte a
+            java.time é embutido no databind.
+        -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+
+        <!-- Spring Cloud OpenFeign -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-openfeign</artifactId>
+        </dependency>
+
+        <!-- Apache HttpClient para Feign (melhor throughput) -->
+        <dependency>
+            <groupId>io.github.openfeign</groupId>
+            <artifactId>feign-hc5</artifactId>
+        </dependency>
+
+        <!--
+            REMOVIDOS: resilience4j-spring-boot3 e spring-boot-starter-aspectj.
+
+            O Resilience4j era dependência morta — nenhuma anotação, nenhuma configuração, nenhum
+            circuit breaker. E o artefato é o '-spring-boot3', rodando sob Boot 4: uma
+            incompatibilidade esperando a primeira anotação para aparecer. O starter de AOP existia
+            apenas para servi-lo.
+
+            A resiliência efetiva do worker hoje vem de mecanismos mais adequados ao modelo de
+            fila, todos já implementados: retry com backoff do próprio SDK (limitado por
+            maxAttempts em FirehoseConfig), reentrega do SQS e a redrivePolicy
+            da fila. Um circuit breaker faz sentido para chamadas Feign síncronas — reintroduzir
+            junto com a primeira delas, já na versão compatível com Boot 4.
+        -->
+
+        <!-- Token Manager (LIB interna da empresa e não deve ser descomentada quando for rodar fora da organizacao da empresa)-->
+<!--        <dependency>-->
+<!--            <groupId>br.com.itau</groupId>-->
+<!--            <artifactId>spring-sts-token-manager</artifactId>-->
+<!--            <version>5.2.0</version>-->
+<!--        </dependency>-->
+
+        <!-- Logging (Logback já vem via spring-boot-starter, adicionamos encoding JSON) -->
+        <dependency>
+            <groupId>net.logstash.logback</groupId>
+            <artifactId>logstash-logback-encoder</artifactId>
+            <version>8.0</version>
+        </dependency>
+
+        <!--
+            Observabilidade: statsd (sabor Datadog), que é o caminho configurado em
+            application.yml e o que o agente do Dockerfile consome.
+
+            micrometer-registry-prometheus foi removido: dois registries ativos ao mesmo tempo
+            fazem cada métrica ser exportada duas vezes, por dois caminhos, e o endpoint
+            /actuator/prometheus não é raspado por ninguém nesta topologia (ECS + agente Datadog).
+            Reintroduzir apenas se houver um scraper de fato.
+        -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-statsd</artifactId>
+        </dependency>
+
+        <!-- Test -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>localstack</artifactId>
+            <version>${testcontainers.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${testcontainers.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+    </dependencies>
+
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>${jacoco.version}</version>
+                <configuration>
+                    <excludes>
+                        <exclude>**/DemoApplication.class</exclude>
+                    </excludes>
+                </configuration>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>report</id>
+                        <phase>prepare-package</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                    <!--
+                        O relatório sozinho não reprova nada — ele só informa. O goal 'check' é o
+                        que transforma cobertura em regra de build.
+
+                        O mínimo continua em 0.00: a suíte cobre o fluxo (domínio, caso de uso,
+                        fachada, mapeamento do item) mas ainda não os adaptadores AWS, e o valor
+                        precisa ser medido num build real antes de virar trava. O pipeline exige o
+                        quality gate Sonar-90, então o destino é 0.90 — subir em degraus,
+                        conferindo o relatório em target/site/jacoco.
+                    -->
+                    <execution>
+                        <id>check</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <rule>
+                                    <element>BUNDLE</element>
+                                    <limits>
+                                        <limit>
+                                            <counter>LINE</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>${jacoco.cobertura.minima}</minimum>
+                                        </limit>
+                                    </limits>
+                                </rule>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!--
+                Testes de integração (*IT) rodam na fase 'verify', separados dos unitários. Sem
+                isto, um teste com LocalStack teria de se chamar *Test e subir container a cada
+                'mvn test'.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!--
+                Trava as premissas do build. O pom exige Java 25 e o pipeline declara essa versão,
+                mas nada impedia alguém de compilar sob outro JDK e descobrir a divergência só no
+                deploy. 'dependencyConvergence' pega conflito de versão transitiva — a classe de
+                problema que se manifesta como NoSuchMethodError em runtime.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <version>${maven-enforcer.version}</version>
+                <executions>
+                    <execution>
+                        <id>enforce</id>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <requireJavaVersion>
+                                    <version>[25,)</version>
+                                </requireJavaVersion>
+                                <requireMavenVersion>
+                                    <version>[3.9,)</version>
+                                </requireMavenVersion>
+                                <dependencyConvergence/>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!--
+                SBOM em CycloneDX, gerado a cada build e anexado ao artefato.
+
+                Sem inventário de dependências não há como responder "esta aplicação usa a
+                biblioteca X?" quando sai uma CVE — a pergunta que aparece sempre em incidente.
+                O CycloneDX é offline: lê a árvore que o Maven já resolveu, sem baixar base de
+                vulnerabilidade. Por isso ele entra aqui e o owasp-dependency-check não: aquele
+                exige download da NVD, que não funciona em rede fechada e tornaria o build
+                dependente de um serviço externo.
+            -->
+            <plugin>
+                <groupId>org.cyclonedx</groupId>
+                <artifactId>cyclonedx-maven-plugin</artifactId>
+                <version>${cyclonedx.version}</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>makeAggregateBom</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <plugin>
+                <groupId>org.sonarsource.scanner.maven</groupId>
+                <artifactId>sonar-maven-plugin</artifactId>
+                <version>4.0.0.4121</version>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

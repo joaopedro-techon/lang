@@ -1,0 +1,15 @@
+# Perfil DEV (ECS).
+#
+# Não há endpoint override nem bloco de credenciais: os clientes AWS falam com os serviços reais
+# e as credenciais vêm da task role, pela cadeia default do SDK. Nomes de fila, tópico, stream e
+# tabela chegam pelas variáveis de ambiente definidas no Terraform (infra/terraform/locals.tf).
+#
+# Aqui ficam apenas os ajustes que realmente variam por ambiente.
+
+app:
+  queue:
+    pedido-max-concurrent: 5
+
+logging:
+  level:
+    com.itau.sg2.custodiaposvenda: DEBUG

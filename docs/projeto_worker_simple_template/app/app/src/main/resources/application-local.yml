@@ -1,0 +1,43 @@
+# Perfil de desenvolvimento local — tudo aponta para o LocalStack.
+#
+# Subir a infra antes:  docker compose up -d
+# Rodar a aplicação:    cd app && ./mvnw spring-boot:run
+#
+# O compose provisiona a fila 'pedido_queue' (com redrivePolicy e DLQ), a 'publicacao_queue', o
+# tópico SNS com uma fila sonda assinada e o delivery stream do Firehose.
+# Ver docker-compose.yml e localstack/init/01-recursos.sh na raiz do repositório.
+
+spring:
+  cloud:
+    aws:
+      region:
+        static: us-east-1
+      # Endpoint global do awspring: vale para SQS e SNS. O cliente do Firehose é montado à mão e
+      # tem o seu próprio override abaixo.
+      endpoint: http://localhost:4566
+      credentials:
+        # O LocalStack aceita qualquer credencial, mas ela precisa existir: sem isto o SDK
+        # percorre a cadeia default, não acha nada e falha na subida.
+        access-key: test
+        secret-key: test
+
+app:
+  firehose:
+    endpoint: http://localhost:4566
+  sns:
+    # No LocalStack o ARN é determinístico (conta 000000000000).
+    topico-pedido: arn:aws:sns:us-east-1:000000000000:pedido_topic
+  queue:
+    pedido: pedido_queue
+    publicacao-sqs: publicacao_queue
+
+management:
+  statsd:
+    metrics:
+      export:
+        # Não há agente Datadog local; deixar ligado só produz erro de conexão a cada export.
+        enabled: false
+
+logging:
+  level:
+    com.itau.sg2.custodiaposvenda: DEBUG

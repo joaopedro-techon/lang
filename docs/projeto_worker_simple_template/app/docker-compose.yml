@@ -1,0 +1,27 @@
+# Infraestrutura local para desenvolvimento (perfil 'local').
+#
+#   docker compose up -d
+#   cd app && ./mvnw spring-boot:run
+#
+# Sem isto o perfil 'local' aponta para um LocalStack que não existe, e o item "dev não consegue
+# rodar localmente" continua valendo na prática mesmo com os arquivos de perfil no lugar.
+
+services:
+  localstack:
+    image: localstack/localstack:3.8
+    container_name: msdemoworker-localstack
+    ports:
+      - "4566:4566"
+    environment:
+      SERVICES: sqs,sns,firehose,s3
+      DEBUG: "0"
+      AWS_DEFAULT_REGION: us-east-1
+    volumes:
+      # Scripts em /etc/localstack/init/ready.d rodam quando o LocalStack fica pronto.
+      - ./localstack/init:/etc/localstack/init/ready.d
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
