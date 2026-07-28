@@ -1,0 +1,90 @@
+<!--
+  Trecho a mesclar no pom.xml de um projeto Spring Boot 2.7.2 / Java 11.
+  Nao e um pom completo.
+-->
+<project>
+
+    <properties>
+        <java.version>11</java.version>
+
+        <!--
+          Bucket4j 8.7.0: ultima linha com baseline Java 11 que este exemplo usa.
+          NAO suba para versoes mais novas sem conferir o baseline de Java e a
+          assinatura de LettuceBasedProxyManager/Optimizations - a API do pacote
+          de otimizacao mudou entre minors.
+        -->
+        <bucket4j.version>8.7.0</bucket4j.version>
+
+        <!--
+          Spring Boot 2.7.2 gerencia lettuce-core 6.1.9.RELEASE. O bucket4j-redis
+          8.7.0 e compilado contra a linha 6.2.x; fixar aqui evita
+          NoSuchMethodError em runtime, que so apareceria sob carga.
+        -->
+        <lettuce.version>6.2.6.RELEASE</lettuce.version>
+    </properties>
+
+    <dependencies>
+
+        <!-- Core do Bucket4j: algoritmo de token bucket. -->
+        <dependency>
+            <groupId>com.bucket4j</groupId>
+            <artifactId>bucket4j-core</artifactId>
+            <version>${bucket4j.version}</version>
+        </dependency>
+
+        <!--
+          Backend distribuido em Redis via Lettuce (CAS).
+          Traz lettuce-core transitivamente; a versao e a fixada acima.
+        -->
+        <dependency>
+            <groupId>com.bucket4j</groupId>
+            <artifactId>bucket4j-redis</artifactId>
+            <version>${bucket4j.version}</version>
+        </dependency>
+
+        <!-- Filtro servlet + actuator (endpoint /actuator/refresh). -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
+        <!-- Config server: fonte do JSON de rate limit e do refresh em runtime. -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-config</artifactId>
+        </dependency>
+
+        <!-- Metricas do rate limit (allowed/rejected/error por bucket). -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-statsd</artifactId>
+        </dependency>
+
+        <!-- Testes: Redis real via Testcontainers, nao mock. -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>1.17.6</version>
+            <scope>test</scope>
+        </dependency>
+
+    </dependencies>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.cloud</groupId>
+                <artifactId>spring-cloud-dependencies</artifactId>
+                <!-- Trem compativel com Spring Boot 2.7.x -->
+                <version>2021.0.8</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+</project>

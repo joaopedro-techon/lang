@@ -1,0 +1,69 @@
+server:
+  port: ${SERVER_PORT:8006}
+
+spring:
+  application:
+    name: ${APPLICATION_NAME:msdemoworker}
+  profiles:
+    active: ${ENVIRONMENT:local}
+  cloud:
+    vault:
+      enabled: false
+    aws:
+      region:
+        static: ${AWS_REGION:sa-east-1}
+    openfeign:
+      httpclient:
+        hc5:
+          enabled: true
+        max-connections: 250
+        max-connections-per-route: 125
+        connection-timeout: 3000
+        connection-request-timeout: 3000
+        time-to-live: 30
+      client:
+        config:
+          default:
+            connect-timeout: 3000
+            read-timeout: 3000
+
+app:
+  sigla-app: SG2-A11
+  queue:
+    pedido: ${SQS_PEDIDO_QUEUE:pedido_queue}
+    pedido-max-concurrent: ${SQS_PEDIDO_MAX_CONCURRENT:10}
+    publicacao-sqs: ${SQS_PUBLICACAO_QUEUE:publicacao_queue}
+  auditoria:
+    ativa: ${AUDITORIA_ATIVA:true}
+  firehose:
+    delivery-stream-name: ${FIREHOSE_DELIVERY_STREAM_NAME:pedido-stream}
+    auditoria-delivery-stream-name: ${FIREHOSE_AUDITORIA_DELIVERY_STREAM_NAME:auditoria-stream}
+  logging:
+    logger-name: ${LOGGER_NAME:com.itau.sg2.custodiaposvenda}
+    application-name: ${APPLICATION_NAME:msdemoworker}
+    service-id: ${SERVICE_ID:msdemoworker}
+    sigla: ${SIGLA:SG2}
+    domain: ${DOMAIN:custodia-pos-venda}
+
+management:
+  endpoints:
+    web:
+      
+      exposure:
+        include: health,info,metrics,prometheus
+        exclude: autoconfig,beans,configprops,dump,env,mappings,shutdown,trace
+      base-path: /actuator
+      path-mapping:
+        health: health
+  metrics:
+    distribution:
+      percentiles-histogram:
+        "[custom.sg2.dogstatsd.app.pedido.processamento.duration]": true
+  statsd:
+    metrics:
+      export:
+        flavor: datadog
+        enabled: true
+        host: ${STATSD_HOST:localhost}
+        port: ${STATSD_PORT:8125}
+        protocol: udp

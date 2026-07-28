@@ -1,0 +1,86 @@
+# Preencher todos os campos com (Obrigatorio)
+# Documentação: https://ideal-bassoon-12961ef9.pages.github.io/jornadas/cloud-publica
+
+project:
+  language: java-maven
+
+infra:
+  terraform:
+    # Obrigatorio
+    working-directory: 'infra/terraform'
+    version: "1.5.7"
+    aws-statefile-acl: "private"
+    aws-s3-data-retention: 0
+    aws-s3-data-classification: "Interna"
+    aws-tech-team-email: "EMAIL@itau-unibanco.com.br"
+    aws-owner-contact-email: "EMAIL@itau-unibanco.com.br"
+    destroy: 'false'
+
+
+build:
+  java-version: '17'                # Default: '17'. Versao que o projeto sera compilado
+  maven-version: '3.8.5'            # Default: '3.8.5'. https://dlcdn.apache.org/maven
+  maven-wrapper-path: ''            # Default: ''. Caminho a partir do working-directory
+  maven-cli-opts: ''                # Default: ''. Parametros adicionais do maven
+  maven-parameters: ''              # Default: ''. Parametros adicionais para o build
+  distribution: 'adopt'             # Default: 'adopt'. https://github.com/actions/setup-java
+  architecture: 'x64'               # Default: 'x64'. Option x86
+  working-directory: 'app'          # Default: '.'. Pasta onde se encontra o projeto
+  output-dir: 'target'              # Default: 'target'. Caso o resultado do build seja direcionado a outra pasta
+  settings-path: 'settings.xml'     # Default: ''. Caminho do arquivo settings.xml
+  cache-version: ''                 # Default: ''. Caso queira alterar o cache utilizado
+  enable-external-dependency: false # Default: ''. Caso tenha dependencias diferentes
+
+test:
+  cli-opts: ''             # Default: ''. Parametros adicionais do maven
+  parameters: ''           # Default: ''. Parametros adicionais para o test
+  working-directory: 'app' # Default: '.'. Pasta onde se encontra o projeto e os comandos serao executados
+
+publish: # Documentação: https://ideal-bassoon-12961ef9.pages.github.io/procedimentos/jobs/publish
+  deploy-only: '' # Default: ''. Empacota todos os arquivos com a extensão informada
+
+deploy:
+  aws:
+    dev:
+      account: "ACCOUNT_ID_DEV"  # Conta AWS de DEV.
+      region: "sa-east-1"        # Região utilizada para deploy
+    hom:
+      account: "ACCOUNT_ID_HOM"  # Conta AWS de HOM.
+      region: "sa-east-1"        # Região utilizada para deploy
+    prod:
+      account: "ACCOUNT_ID_PROD" # Conta AWS de PROD.
+      region: "sa-east-1"        # Região utilizada para deploy
+
+security:
+  fortify:
+    environment-analyse: 'public_cloud' # Default: 'public_cloud'. Associado a instancia
+    nome-aws: 'AWS_APP'                 # Default: N/A. Nome da aplicacao
+    produto-aws: 'ACCOUNT_NAME'         # Default: N/A. Nome do produto
+
+
+quality:
+  sonar:
+    language: java-maven      # A linguagem que será feita a análise de código
+    working-directory: 'app'  # O path que se encontra o projeto
+    projectPropertiesPath: '' # O path que se encontra o arquivo sonar-project.properties
+    parameters: ''            # Parametros adicionais para o build Ex. -Dsonar.projectKey=myproject
+
+taac:
+  dev:
+    failOnError: false ##Em caso de teste com falha, o step do taac apresenta erro(fica vermelho)
+    codebuild:
+      computeType: "BUILD_GENERAL1_SMALL" ##Tipo de maquina codebuild provisionado para executar o teste
+  hom:
+    failOnError: false
+    codebuild:
+      computeType: "BUILD_GENERAL1_SMALL"
+
+p4all:
+  dev:
+    failOnError: false ##Em caso de teste com falha, o step do Performance4All apresenta erro (fica vermelho)
+    codebuild:
+      computeType: "BUILD_GENERAL1_SMALL" ##Tipo de máquina codebuild provisionado para executar o teste
+  hom:
+    failOnError: false
+    codebuild:
+      computeType: "BUILD_GENERAL1_SMALL"

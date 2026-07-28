@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <!-- Console output para desenvolvimento local -->
+    <springProfile name="local">
+        <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder>
+                <Pattern>%d{yyyy/MM/dd HH:mm:ss.SSS} [%thread] [%-5level] %logger{36} - %msg%n</Pattern>
+                <charset>UTF-8</charset>
+            </encoder>
+        </appender>
+
+        <root level="${LOG_LEVEL:-INFO}">
+            <appender-ref ref="CONSOLE"/>
+        </root>
+    </springProfile>
+
+    <!-- JSON structured logging para ambientes deployados (dev, hom, prod) -->
+    <springProfile name="!local">
+        <appender name="JSON" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                <includeContext>false</includeContext>
+                <includeMdc>true</includeMdc>
+                <fieldNames>
+                    <timestamp>timestamp</timestamp>
+                    <message>message</message>
+                    <logger>logger</logger>
+                    <thread>thread</thread>
+                    <level>level</level>
+                    <stackTrace>stack_trace</stackTrace>
+                </fieldNames>
+                <throwableConverter class="net.logstash.logback.stacktrace.ShortenedThrowableConverter">
+                    <maxDepthPerThrowable>30</maxDepthPerThrowable>
+                    <shortenedClassNameLength>36</shortenedClassNameLength>
+                    <rootCauseFirst>true</rootCauseFirst>
+                </throwableConverter>
+            </encoder>
+            <immediateFlush>false</immediateFlush>
+        </appender>
+
+        <!-- Tira a serializacao JSON da thread de processamento da fila -->
+        <appender name="ASYNC_JSON" class="ch.qos.logback.classic.AsyncAppender">
+            <appender-ref ref="JSON"/>
+            <queueSize>8192</queueSize>
+            <discardingThreshold>0</discardingThreshold>
+            <neverBlock>false</neverBlock>
+            <maxFlushTime>3000</maxFlushTime>
+        </appender>
+
+        <root level="${LOG_LEVEL:-INFO}">
+            <appender-ref ref="ASYNC_JSON"/>
+        </root>
+    </springProfile>
+
+    <!-- Reduz verbosidade de libs -->
+    <logger name="org.springframework" level="WARN"/>
+    <logger name="software.amazon.awssdk" level="WARN"/>
+    <logger name="io.awspring.cloud" level="INFO"/>
+    <logger name="com.itau.sg2.custodiaposvenda" level="${APP_LOG_LEVEL:-INFO}"/>
+
+</configuration>

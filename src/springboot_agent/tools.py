@@ -145,19 +145,19 @@ def create_directory(path: str) -> str:
 
 
 @tool
-def run_maven(args: str = "validate") -> str:
+def run_maven(goals: str = "validate") -> str:
     """Executa um comando Maven na raiz do projeto e retorna a saida.
 
-    `args` sao os argumentos do mvn (ex.: "validate", "compile",
+    `goals` sao os argumentos do mvn (ex.: "validate", "compile",
     "dependency:tree"). Use para VERIFICAR que as mudancas nao quebraram
     o build. Prefira comandos rapidos como "validate" ou "compile".
     """
     root = get_project_root()
     # No Windows o executavel costuma ser mvn.cmd; deixamos o shell resolver.
-    comando = f"mvn -B {args}"
+    comando = f"mvn -B {goals}"
 
     if not _confirmar(f"executar Maven: {comando}", f"Pasta: {root}"):
-        return f"CANCELADO: usuario nao aprovou 'mvn {args}'"
+        return f"CANCELADO: usuario nao aprovou 'mvn {goals}'"
 
     try:
         resultado = subprocess.run(

@@ -4,15 +4,20 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "springboot-agent"
-version = "0.1.0"
-description = "Agente de IA (LangGraph + Claude) especialista em configurar projetos Spring Boot"
+version = "0.2.0"
+description = "Agente (LangGraph + Claude) que inicializa projetos Spring Boot da organizacao"
 requires-python = ">=3.10"
 dependencies = [
-    "langgraph>=0.2.0",
+    # interrupt()/Command com a API atual: langgraph >= 0.2.57
+    "langgraph>=0.2.57",
     "langchain-anthropic>=0.3.0",
     "langchain-core>=0.3.0",
     "python-dotenv>=1.0.0",
 ]
+
+# Cria o executavel `springboot-agent` no PATH ao rodar `pip install -e .`
+[project.scripts]
+springboot-agent = "springboot_agent.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

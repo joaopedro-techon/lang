@@ -1,0 +1,145 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ecr:GetAuthorizationToken",
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:BatchGetImage"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents",
+        "logs:DescribeLogStreams"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ssm:UpdateInstanceInformation",
+        "ssm:ListInstanceAssociations",
+        "ssm:DescribeInstanceProperties",
+        "ssm:DescribeDocumentParameters",
+        "ssm:GetParameter",
+        "ssm:GetParameters",
+        "ssm:GetParametersByPath"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "kms:DescribeKey",
+        "kms:ListAliases",
+        "kms:ListKeys",
+        "kms:Encrypt",
+        "kms:Decrypt",
+        "kms:ReEncrypt*",
+        "kms:GenerateDataKey*",
+        "kms:DescribeKey"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:GetRandomPassword",
+        "secretsmanager:GetResourcePolicy",
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:ListSecretVersionIds",
+        "secretsmanager:ListSecrets"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ecs:DiscoverPollEndpoint",
+        "ecs:RegisterContainerInstance",
+        "ecs:SubmitContainerStateChange",
+        "ecs:SubmitTaskStateChange",
+        "ecs:ListContainerInstances",
+        "ecs:Poll",
+        "ecs:StartTelemetrySession",
+        "ecs:UpdateContainerInstancesState",
+        "ecs:ListTasks",
+        "ecs:DescribeContainerInstances",
+        "ecs:ExecuteCommand"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:PutMetricAlarm",
+        "cloudwatch:PutDashboard",
+        "cloudwatch:PutMetricData",
+        "cloudwatch:GetMetricData",
+        "cloudwatch:ListMetrics"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "xray:BatchGetTraces",
+        "xray:CreateGroup",
+        "xray:CreateSamplingRule",
+        "xray:DeleteGroup",
+        "xray:DeleteSamplingRule",
+        "xray:GetEncryptionConfig",
+        "xray:GetGroup",
+        "xray:GetGroups",
+        "xray:GetInsight",
+        "xray:GetInsightEvents",
+        "xray:GetInsightImpactGraph",
+        "xray:GetInsightSummaries",
+        "xray:GetSamplingRules",
+        "xray:GetSamplingStatisticSummaries",
+        "xray:GetSamplingTargets",
+        "xray:GetServiceGraph",
+        "xray:GetTimeSeriesServiceStatistics",
+        "xray:GetTraceGraph",
+        "xray:GetTraceSummaries",
+        "xray:ListTagsForResource",
+        "xray:PutEncryptionConfig",
+        "xray:PutTelemetryRecords",
+        "xray:PutTraceSegments",
+        "xray:TagResource",
+        "xray:UntagResource",
+        "xray:UpdateGroup",
+        "xray:UpdateSamplingRule"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ssmmessages:CreateControlChannel",
+        "ssmmessages:CreateDataChannel",
+        "ssmmessages:OpenControlChannel",
+        "ssmmessages:OpenDataChannel"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "iam:PassRole"
+      ],
+      "Resource": [
+        "arn:aws:ecs:*:*:container-instance/*",
+        "arn:aws:ecs:*:*:cluster/*"
+      ]
+    }
+  ]
+}
