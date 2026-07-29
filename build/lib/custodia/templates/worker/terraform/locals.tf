@@ -1,35 +1,35 @@
 locals {
 
-  sigla = "XXX"
+  sigla = "{{SIGLA}}"
 
-  sigla_app = "XXX-XXXXX"
+  sigla_app = "{{SIGLA_APP}}"
 
-  produto = "Nome do produto"
+  produto = "{{PRODUTO}}"
 
-  context = "context"
+  context = "{{CONTEXT}}"
 
-  owner_contact_email = "owner-contact-email@itau-unibanco.com.br"
+  owner_contact_email = "{{OWNER_EMAIL}}"
 
-  tech_team_email = "tech-team-email@itau-unibanco.com.br"
+  tech_team_email = "{{TECH_EMAIL}}"
 
   finalidade = "modernizacao"
 
-  squad = "squad"
+  squad = "{{SQUAD}}"
 
-  feature_name = "feature"
+  feature_name = "{{FEATURE_NAME}}"
 
-  microservice_name = "microservice"
+  microservice_name = "{{MICROSERVICE_NAME}}"
 
   additional_tags = {
     "sigla-app"                          = local.sigla_app
-    "iu:finops:alocacao:squad"           = "SQUAD (S000000)"
+    "iu:finops:alocacao:squad"           = "{{FINOPS_SQUAD}}"
     "iu:finops:alocacao:sigla"           = lower(local.sigla)
     "iu:finops:alocacao:sigla-app"       = local.sigla_app
-    "iu:finops:alocacao:produto"         = "Nome-do-produto"
+    "iu:finops:alocacao:produto"         = "{{FINOPS_PRODUTO}}"
     "iu:finops:alocacao:empresa"         = "341"
-    "iu:finops:alocacao:projeto"         = "projeto"
-    "iu:finops:alocacao:oferta"          = "Oferta"
-    "iu:finops:alocacao:servico-negocio" = "Servico de negocio"
+    "iu:finops:alocacao:projeto"         = "{{FINOPS_PROJETO}}"
+    "iu:finops:alocacao:oferta"          = "{{FINOPS_OFERTA}}"
+    "iu:finops:alocacao:servico-negocio" = "{{FINOPS_SERVICO}}"
     "MicroServiceName"                   = local.microservice_name
     "tech-team-email"                    = local.tech_team_email
     "owner-team-email"                   = local.owner_contact_email
@@ -111,13 +111,6 @@ locals {
     command = [
       "CMD-SHELL", "curl -f http://localhost:${local.default_container_port}${local.healthcheck_path} || exit 1"
     ]
-  }
-
-  task_log_driver = {
-    log-driver = "awsfirelens"
-    options = {
-      Name = "${local.sigla}-${local.feature_name}-${local.microservice_name}"
-    }
   }
 
   task_datadog = {

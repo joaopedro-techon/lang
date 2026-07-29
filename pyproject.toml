@@ -3,21 +3,49 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "springboot-agent"
-version = "0.2.0"
-description = "Agente (LangGraph + Claude) que inicializa projetos Spring Boot da organizacao"
+name = "custodia-cli"
+dynamic = ["version"]
+description = "Custod.IA - agente (LangGraph + Claude) que inicializa projetos Spring Boot da organizacao"
+readme = "README.md"
 requires-python = ">=3.10"
+
+# Trava de seguranca: o PyPI publico RECUSA qualquer pacote com este
+# classifier. Como o Custod.IA so vai para o Artifactory interno, um
+# `twine upload` sem --repository-url falha em vez de vazar o pacote.
+classifiers = ["Private :: Do Not Upload"]
+
 dependencies = [
     # interrupt()/Command com a API atual: langgraph >= 0.2.57
     "langgraph>=0.2.57",
     "langchain-anthropic>=0.3.0",
     "langchain-core>=0.3.0",
     "python-dotenv>=1.0.0",
+    # UI do terminal: markdown, syntax highlighting e spinner na conversa.
+    "rich>=13.0",
+    # Selecao com setas no wizard (Choice aceita `description` a partir da 2.0).
+    "questionary>=2.0",
 ]
 
-# Cria o executavel `springboot-agent` no PATH ao rodar `pip install -e .`
+# Cria o executavel `custodia` no PATH ao rodar `pip install custodia-cli`
 [project.scripts]
-springboot-agent = "springboot_agent.main:main"
+custodia = "custodia.main:main"
+
+# Ferramentas de empacotamento/publicacao: `pip install -e ".[dev]"`
+[project.optional-dependencies]
+dev = ["build>=1.0", "twine>=5.0"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# Os templates de terraform viajam DENTRO da wheel: instalado do Artifactory,
+# o pacote nao tem acesso ao repositorio do agente.
+[tool.setuptools.package-data]
+custodia = [
+    "templates/worker/terraform/*.tf",
+    "templates/worker/terraform/iamsr/policy/*.json",
+    "templates/worker/terraform/iamsr/trust/*.json",
+]
+
+# Versao vem de src/custodia/__init__.py -- fonte unica.
+[tool.setuptools.dynamic]
+version = { attr = "custodia.__version__" }

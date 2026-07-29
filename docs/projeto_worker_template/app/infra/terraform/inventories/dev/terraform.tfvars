@@ -1,11 +1,11 @@
 ############## definições basicas do service
 environment = "dev"
 
-ecs_cluster_name = "ecs-cluster"
+ecs_cluster_name = "ecs-cluster" // [PARAMETRO_IA - Deve listar opções da AWS]
 
 service_desired_count = 1
 
-autoscaling = {
+autoscaling = { // [PARAMETRO_IA - Deve perguntar para o usuário a quantidade de chamadas por segunda que o worker irá processar. O calculo deve ser feito pel proprio agente de acordo com o backlog da fila SQS]
   min_capacity = 1
   max_capacity = 3
   scale_up = {
@@ -24,7 +24,7 @@ autoscaling = {
       { lower_bound = null, upper_bound = 0, scaling_adjustment = -1 }
     ]
   }
-  queue_names = ["queue_name"]
+  queue_names = ["queue_name"]  // [PARAMETRO_IA - Deve perguntar ao usuário as filas SQS que serão verificadas no auto scaling]
 }
 
 service_launch_config = {
@@ -39,21 +39,21 @@ service_launch_config = {
 }
 
 ############## configurações minimas de rede
-service_vpc_id = "vpc-00000000000000000"
+service_vpc_id = "vpc-00000000000000000" //[PARAMETRO_IA - Deve listar opções da AWS]
 
-service_cidr_blocks = [
+service_cidr_blocks = [ // [PARAMETRO_IA - Deve listar opções da AWS]
   "xxx.xxx.xxx.xxx/xx",
   "yyy.yyy.yyy.yyy/yy",
   "zzz.zzz.zzz.zzz/zz"
 ]
 
-service_subnets = [
+service_subnets = [ // [PARAMETRO_IA - Deve listar opções da AWS]
   "subnet-0000000000000000a",
   "subnet-0000000000000000b",
   "subnet-0000000000000000c"
 ]
 
-task_container_port = [
+task_container_port = [ // [PARAMETRO_IA - Deve perguntar a porta do container para o usuario]
   {
     containerPort = 8006
   }

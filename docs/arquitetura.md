@@ -88,7 +88,7 @@ dependências (multi-escolha)
 revisar / confirmar ── "não" ─────────────► END   (cancelado)
   │ "sim"
   ▼
-grava .springboot-agent/spec.json ────────► END
+grava .custodia/spec.json ────────► END
 ```
 
 Repare que **nenhuma escrita em disco acontece antes da confirmação**. Os caminhos
@@ -99,18 +99,45 @@ que terminam em "feature indisponível" ou "cancelado" não deixam rastro.
 ## 4. As camadas
 
 ```
-cli.py          REPL: lê /comandos e DIRIGE o grafo (invoke → interrupt → resume)
+cli.py          REPL: roteia texto solto → conversa, /comandos → wizard
    │
-   ├── ui.py            desenha a pergunta no terminal e insiste até ser válida
+   ├── chat.py          a conversa: guarda o histórico e mostra, via stream(),
+   │      │             cada chamada de ferramenta enquanto ela acontece
+   │      └── graph.py       o agente ReAct: assistant ↔ tools
+   │             ├── tools.py     ler/escrever arquivo, Maven (com aprovação s/N)
+   │             └── prompts.py   a persona: domínio da custódia + a stack
    │
-   └── initialize.py    o grafo: nós, arestas e as regras de desvio
+   ├── ui.py            o `console` (rich) compartilhado por toda a CLI, e os
+   │                    DOIS frontends do wizard: navegado (setas, via
+   │                    questionary) e digitado ("1,3"), com queda automática
+   │                    do primeiro para o segundo
+   │
+   ├── initialize.py    o grafo do /initialize: nós, arestas e desvios
+   │      │
+   │      ├── questions.py   as perguntas como DADOS + a validação (fonte única)
+   │      └── spec.py        o artefato final: .custodia/spec.json
+   │
+   └── infra.py         o grafo do /infra, com um ciclo por ambiente
           │
-          ├── questions.py   as perguntas como DADOS + a validação (fonte única)
-          └── spec.py        o artefato final: .springboot-agent/spec.json
+          ├── aws.py            lista clusters/VPCs/subnets/filas pela AWS CLI
+          ├── dimensionamento.py  a fórmula do autoscaling
+          └── terraform.py      escreve infra/terraform/ a partir dos templates
 ```
 
+Os dois grafos determinísticos compartilham `questions.py` e o mesmo par
+`interrupt()` + frontend. O `/infra` acrescenta uma regra própria: **nó que chama a
+AWS nunca tem `interrupt()`**. Se estivessem juntos, cada retomada refaria as
+consultas de rede — porque um nó que pausa re-executa inteiro.
+
+Os dois ramos são independentes de propósito: o da esquerda é **aberto e assistido
+por LLM**, o da direita é **fechado e determinístico**. Só o ramo da conversa precisa
+de `ANTHROPIC_API_KEY` — e o grafo dele só é construído no primeiro turno, então o
+wizard funciona numa máquina sem chave nenhuma.
+
 A regra que amarra tudo: **`questions.validate()` é a única fonte da verdade sobre
-o que é uma resposta válida.**
+o que é uma resposta válida.** É por isso que ter dois frontends de pergunta não
+duplica regra nenhuma: o navegado e o digitado produzem um valor e passam os dois
+pelo mesmo `validate()`.
 
 - O `ui.py` chama `validate()` para reperguntar na hora, com mensagem amigável.
 - O `initialize.py` chama `validate()` de novo, como rede de segurança.
@@ -184,11 +211,13 @@ O `ui.py` **não muda** — ele já sabe desenhar qualquer pergunta dos tipos
 
 Uma entrada nova em `_COMANDOS_UNICOS`, em `cli.py`. O loop do REPL não muda.
 
-### Quando entrar o LLM
+### Onde o LLM já entra
 
 Os arquivos `graph.py`, `tools.py` e `prompts.py` são o agente ReAct (Claude +
-ferramentas de ler/escrever arquivo e rodar Maven). Hoje eles **não são chamados por
-nenhum comando** — ficaram prontos para o `/generate`, que vai:
+ferramentas de ler/escrever arquivo e rodar Maven). Hoje quem os usa é a **conversa**
+(`chat.py`), acionada por texto solto no prompt ou pelo `/chat`.
+
+O mesmo agente vai servir ao `/generate`, que vai:
 
 1. ler a spec com `load_spec()`;
 2. montar um prompt com o que foi decidido (fila, throughput, dependências);
@@ -205,13 +234,13 @@ conseguir **retomar um `/initialize` no dia seguinte** de onde parou. Uma linha 
 
 ## 7. Formato da spec
 
-`<projeto>/.springboot-agent/spec.json`:
+`<projeto>/.custodia/spec.json`:
 
 ```json
 {
   "spec_version": 1,
   "generated_at": "2026-07-25T17:30:39+00:00",
-  "generated_by": "springboot-agent 0.2.0",
+  "generated_by": "Custod.IA 0.2.0",
   "project": {
     "type": "worker",
     "trigger": "sqs",
