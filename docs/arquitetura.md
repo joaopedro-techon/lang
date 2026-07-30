@@ -110,7 +110,10 @@ cli.py          REPL: roteia texto solto → conversa, /comandos → wizard
    ├── ui.py            o `console` (rich) compartilhado por toda a CLI, e os
    │                    DOIS frontends do wizard: navegado (setas, via
    │                    questionary) e digitado ("1,3"), com queda automática
-   │                    do primeiro para o segundo
+   │                    do primeiro para o segundo. No modo `guiado=True` (só
+   │                    o /config) a escolha do frontend é PERGUNTADA antes de
+   │                    cada pergunta com opções, e todas ganham exemplo de
+   │                    resposta válida
    │
    ├── initialize.py    o grafo do /initialize: nós, arestas e desvios
    │      │
@@ -120,6 +123,9 @@ cli.py          REPL: roteia texto solto → conversa, /comandos → wizard
    └── infra.py         o grafo do /infra, com um ciclo por ambiente
           │
           ├── aws.py            lista clusters/VPCs/subnets/filas pela AWS CLI
+          │                     (erro de certificado → repete uma vez com
+          │                     --no-verify-ssl, avisando, e o resto da sessão
+          │                     já sai assim)
           ├── dimensionamento.py  a fórmula do autoscaling
           └── terraform.py      escreve infra/terraform/ a partir dos templates
 ```

@@ -24,6 +24,8 @@ import subprocess
 from dataclasses import dataclass
 from typing import Any
 
+from .ui import console
+
 # Os perfis que a area padronizou, um por ambiente.
 PERFIS = {
     "dev": "CUSTODIA-AI-DEV",
@@ -38,6 +40,25 @@ REGIAO_PADRAO = "sa-east-1"
 # Consulta na AWS raramente passa disso; o limite existe para o wizard nao
 # ficar pendurado num terminal esperando resposta que nao vem.
 TIMEOUT = 60
+
+# Trechos que aparecem na saida da CLI quando o handshake TLS falhou na
+# VALIDACAO do certificado -- e nao por rede fora do ar ou host errado. So
+# esses valem a segunda tentativa: a lista e restrita de proposito, para um
+# "connection refused" nunca acabar desligando a verificacao.
+_SINAIS_DE_SSL = (
+    "certificate_verify_failed",
+    "certificate verify failed",
+    "sslcertverificationerror",
+    "ssl validation failed",
+    "unable to get local issuer certificate",
+    "self signed certificate",
+    "self-signed certificate",
+)
+
+# Vira True na primeira falha de TLS. Um proxy que intercepta uma chamada
+# intercepta as seguintes -- sem isto o wizard pagaria o erro, o aviso e a
+# repeticao a cada consulta. Mesma ideia do `_navegacao_quebrada` no ui.py.
+_sem_verificacao_ssl = False
 
 
 class AwsIndisponivel(RuntimeError):
@@ -90,7 +111,13 @@ def regiao_do_perfil(perfil: str) -> str:
 
 
 def _chamar(perfil: str, *args: str) -> Any:
-    """Roda `aws ... --profile <perfil> --region <regiao> --output json`."""
+    """Roda `aws ... --profile <perfil> --region <regiao> --output json`.
+
+    Se a chamada falhar na validacao do certificado, repete UMA vez com
+    `--no-verify-ssl` -- ver `_e_erro_de_ssl`.
+    """
+    global _sem_verificacao_ssl
+
     if not cli_instalada():
         raise AwsIndisponivel(
             "a AWS CLI nao esta no PATH. Instale a v2 e configure os perfis "
@@ -103,12 +130,16 @@ def _chamar(perfil: str, *args: str) -> Any:
         "--region", regiao_do_perfil(perfil),
         "--output", "json",
     ]
-    try:
-        resultado = subprocess.run(
-            comando, capture_output=True, text=True, timeout=TIMEOUT
-        )
-    except subprocess.TimeoutExpired:
-        raise AwsIndisponivel(f"a AWS demorou mais de {TIMEOUT}s para responder.") from None
+    resultado = _rodar(comando, sem_verificar=_sem_verificacao_ssl)
+
+    if (
+        resultado.returncode != 0
+        and not _sem_verificacao_ssl
+        and _e_erro_de_ssl(resultado.stderr or resultado.stdout)
+    ):
+        _avisar_ssl()
+        _sem_verificacao_ssl = True
+        resultado = _rodar(comando, sem_verificar=True)
 
     if resultado.returncode != 0:
         raise AwsIndisponivel(_diagnosticar(perfil, resultado.stderr or resultado.stdout))
@@ -117,6 +148,47 @@ def _chamar(perfil: str, *args: str) -> Any:
         return json.loads(resultado.stdout or "{}")
     except json.JSONDecodeError as exc:
         raise AwsIndisponivel(f"resposta da AWS nao e JSON valido: {exc}") from exc
+
+
+def _rodar(comando: list[str], sem_verificar: bool = False) -> subprocess.CompletedProcess:
+    """Executa a CLI. `sem_verificar` acrescenta o `--no-verify-ssl`."""
+    if sem_verificar:
+        comando = [*comando, "--no-verify-ssl"]
+    try:
+        return subprocess.run(
+            comando, capture_output=True, text=True, timeout=TIMEOUT
+        )
+    except subprocess.TimeoutExpired:
+        raise AwsIndisponivel(f"a AWS demorou mais de {TIMEOUT}s para responder.") from None
+
+
+def _e_erro_de_ssl(saida: str) -> bool:
+    """A chamada morreu validando o certificado do endpoint?
+
+    O caso real e proxy corporativo que reassina o TLS com uma CA propria: o
+    certificado que chega e valido, so nao esta no bundle que a CLI carrega.
+    Repetir sem verificacao faz a consulta passar, mas desliga a checagem de
+    quem esta do outro lado -- por isso e fallback, nunca o padrao, e por isso
+    ele avisa em voz alta quando acontece.
+    """
+    minusculo = (saida or "").lower()
+    return any(sinal in minusculo for sinal in _SINAIS_DE_SSL)
+
+
+def _avisar_ssl() -> None:
+    """Diz que a verificacao caiu, e como parar de precisar disso.
+
+    Nada de silencioso aqui: uma consulta sem validar certificado e uma
+    consulta em que nao da para provar com quem se falou.
+    """
+    console.print(
+        "\n[yellow]Certificado TLS recusado ao falar com a AWS.[/yellow] "
+        "Repetindo com [bold]--no-verify-ssl[/bold] -- vale para as proximas "
+        "consultas desta sessao.\n"
+        "[dim]Isto desliga a validacao do certificado. Costuma ser proxy da "
+        "empresa reassinando o TLS; a correcao definitiva e apontar o CA dele "
+        "em AWS_CA_BUNDLE (ou REQUESTS_CA_BUNDLE).[/dim]\n"
+    )
 
 
 def _diagnosticar(perfil: str, saida: str) -> str:
@@ -143,6 +215,16 @@ def _diagnosticar(perfil: str, saida: str) -> str:
         )
     if "accessdenied" in minusculo or "unauthorized" in minusculo:
         return f"o perfil '{perfil}' nao tem permissao para esta consulta.\n{texto}"
+    if "ssl" in minusculo or "certificate" in minusculo:
+        # Chegar aqui significa que nem o --no-verify-ssl resolveu, ou que o
+        # erro de TLS veio com um texto que o `_e_erro_de_ssl` nao reconhece.
+        # Nos dois casos a pista util e a mesma.
+        return (
+            f"falha de TLS ao falar com a AWS pelo perfil '{perfil}'.\n"
+            "Se a sua rede usa proxy com certificado proprio, aponte o CA dele "
+            "em AWS_CA_BUNDLE.\n"
+            f"{texto}"
+        )
     return f"falha ao consultar a AWS com o perfil '{perfil}':\n{texto}"
 
 

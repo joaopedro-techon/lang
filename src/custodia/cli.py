@@ -173,13 +173,18 @@ def cmd_config(root: Path) -> bool:
     """Cria o esqueleto do .env e dos perfis da AWS."""
     titulo("/config - prepara o ambiente do agente")
 
+    # guiado=True em todas as perguntas daqui: o /config pergunta antes se e
+    # para listar as opcoes ou se a pessoa prefere digitar, e mostra um
+    # exemplo de resposta valida. Ver `perguntar_no_terminal`.
     try:
-        provedor = perguntar_no_terminal(Q_PROVEDOR.to_dict())
-        ambientes = perguntar_no_terminal(Q_AMBIENTES.to_dict())
+        provedor = perguntar_no_terminal(Q_PROVEDOR.to_dict(), guiado=True)
+        ambientes = perguntar_no_terminal(Q_AMBIENTES.to_dict(), guiado=True)
         # So perguntamos o metodo se houver perfil a criar: quem nao marcou
         # ambiente nenhum nao precisa responder sobre autenticacao da AWS.
         metodo = (
-            perguntar_no_terminal(Q_METODO_AWS.to_dict()) if ambientes else "sso"
+            perguntar_no_terminal(Q_METODO_AWS.to_dict(), guiado=True)
+            if ambientes
+            else "sso"
         )
     except WizardAbortado:
         console.print("\n[yellow]/config cancelado. Nada foi escrito.[/yellow]\n")
@@ -203,7 +208,7 @@ def cmd_config(root: Path) -> bool:
         return True
 
     try:
-        if not perguntar_no_terminal(Q_CONFIRMAR(pendencias).to_dict()):
+        if not perguntar_no_terminal(Q_CONFIRMAR(pendencias).to_dict(), guiado=True):
             console.print("\n[yellow]/config cancelado. Nada foi escrito.[/yellow]\n")
             return True
     except WizardAbortado:

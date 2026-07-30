@@ -29,7 +29,7 @@ from typing import Any
 from rich.console import Console
 from rich.markup import escape
 
-from .questions import Question, ValidationError, validate
+from .questions import Option, Question, ValidationError, validate
 
 try:
     import questionary
@@ -71,6 +71,11 @@ _NAO = {"n", "nao", "não", "no", ""}
 # Formas de dizer "nenhuma" numa multi-escolha.
 _NENHUMA = {"nenhuma", "nenhum", "none", "0", "-"}
 
+# Respostas aceitas na pergunta de formato do modo guiado. Enter cai em
+# "listar" porque e o comportamento que o wizard sempre teve.
+_LISTAR = {"l", "listar", "lista", "1", ""}
+_DIGITAR = {"d", "digitar", "digitado", "digite", "2"}
+
 
 class WizardAbortado(RuntimeError):
     """Usuario interrompeu o wizard (Ctrl+C ou fim da entrada)."""
@@ -91,7 +96,7 @@ class _SemNavegacao(RuntimeError):
 _navegacao_quebrada = False
 
 
-def perguntar_no_terminal(payload: dict[str, Any]) -> Any:
+def perguntar_no_terminal(payload: dict[str, Any], guiado: bool = False) -> Any:
     """Mostra a pergunta e devolve uma resposta ja validada.
 
     `payload` e o dict emitido pelo `interrupt()` do grafo. Existem dois
@@ -103,14 +108,28 @@ def perguntar_no_terminal(payload: dict[str, Any]) -> Any:
 
     Os dois terminam no mesmo `validate()`, entao o grafo nunca recebe entrada
     invalida -- venha ela de qual frontend for.
+
+    `guiado=True` liga o modo do /config: em vez de o wizard DECIDIR o
+    frontend, ele PERGUNTA antes de cada pergunta com opcoes ("listar ou
+    digitar?"), e toda pergunta ganha um exemplo de resposta valida montado a
+    partir das opcoes reais. O padrao e False para o /initialize e o /infra
+    seguirem exatamente como eram.
     """
     global _navegacao_quebrada
 
     pergunta = Question.from_dict(payload)
 
-    if _pode_navegar(pergunta):
+    # No modo guiado quem responde escolhe o formato. So perguntamos quando ha
+    # opcoes para listar (num sim/nao nao ha lista nenhuma) e quando existe
+    # alguem de verdade do outro lado -- num pipe a pergunta extra comeria uma
+    # linha da entrada e desalinharia todas as respostas seguintes.
+    listar = True
+    if guiado and pergunta.options and _entrada_interativa():
+        listar = _perguntar_formato(pergunta)
+
+    if listar and _pode_navegar(pergunta):
         try:
-            return _perguntar_navegando(pergunta)
+            return _perguntar_navegando(pergunta, guiado=guiado)
         except _SemNavegacao as exc:
             _navegacao_quebrada = True
             console.print(
@@ -118,14 +137,103 @@ def perguntar_no_terminal(payload: dict[str, Any]) -> Any:
                 f"{escape(str(exc))} -- seguindo no modo digitado)[/dim]"
             )
 
-    _renderizar_enunciado(pergunta)
+    _renderizar_enunciado(pergunta, compacto=not listar)
     while True:
-        bruto = _ler(_texto_do_prompt(pergunta))
+        bruto = _ler(_texto_do_prompt(pergunta, guiado=guiado))
         try:
             valor = _converter(pergunta, bruto)
             return validate(pergunta, valor)
         except ValidationError as exc:
             print(f"  ! {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Modo guiado: o formato da resposta e os exemplos
+# ---------------------------------------------------------------------------
+
+def _perguntar_formato(pergunta: Question) -> bool:
+    """Pergunta se e para listar as opcoes ou se a pessoa prefere digitar.
+
+    Devolve True para listar. O titulo da pergunta vem junto de proposito:
+    sem ele a escolha de formato apareceria sem contexto nenhum, e quem esta
+    no meio do wizard nao saberia sobre o que esta decidindo.
+    """
+    console.print()
+    console.print(f"[bold]{escape(pergunta.title)}[/bold]")
+    while True:
+        resposta = _ler(
+            "  Listar as opcoes ou prefere digitar? [l/d] (enter = listar): "
+        ).strip().lower()
+        if resposta in _LISTAR:
+            return True
+        if resposta in _DIGITAR:
+            return False
+        print("  ! Responda 'l' para listar ou 'd' para digitar.")
+
+
+def _exemplo_digitado(pergunta: Question) -> str:
+    """Um exemplo de resposta valida, montado das opcoes REAIS da pergunta.
+
+    Usa o `value` e nao o numero da linha: no modo digitado a lista numerada
+    pode nem estar na tela (foi isso que a pessoa escolheu), e um exemplo que
+    cita "2" sem mostrar a lista nao ajuda ninguem. O numero continua sendo
+    aceito -- ver `_resolver_opcao`.
+    """
+    if pergunta.kind == "choice" and pergunta.options:
+        # A segunda opcao quando existe: a primeira e o padrao obvio, e um
+        # exemplo que repete o padrao nao ensina que da para escolher outra.
+        opcao = pergunta.options[1] if len(pergunta.options) > 1 else pergunta.options[0]
+        return f"ex.: {opcao.value}"
+    if pergunta.kind == "multi_choice" and pergunta.options:
+        escolhidas = _duas_opcoes(pergunta)
+        exemplo = f"ex.: {','.join(o.value for o in escolhidas)}"
+        if pergunta.allow_empty:
+            exemplo += " | enter = nenhuma"
+        return exemplo
+    if pergunta.kind == "confirm":
+        return "ex.: s para aplicar, enter para cancelar"
+    if pergunta.kind == "integer" and pergunta.min_value is not None:
+        return f"ex.: {pergunta.min_value}"
+    return ""
+
+
+def _exemplo_navegado(pergunta: Question) -> str:
+    """O mesmo exemplo, na lingua do frontend de setas.
+
+    "ex.: digite openai" seria mentira aqui: nesta tela nao se digita nada.
+    """
+    if pergunta.kind == "choice" and pergunta.options:
+        opcao = pergunta.options[1] if len(pergunta.options) > 1 else pergunta.options[0]
+        return f"ex.: desca ate '{opcao.label}' e aperte enter"
+    if pergunta.kind == "multi_choice" and pergunta.options:
+        escolhidas = _duas_opcoes(pergunta)
+        rotulos = " e ".join(f"'{o.label}'" for o in escolhidas)
+        exemplo = f"ex.: marque {rotulos} com espaco e aperte enter"
+        if pergunta.allow_empty:
+            exemplo += "; so enter = nenhuma"
+        return exemplo
+    if pergunta.kind == "confirm":
+        return "ex.: y para aplicar, enter para cancelar"
+    return ""
+
+
+def _duas_opcoes(pergunta: Question) -> tuple[Option, ...]:
+    """Duas opcoes para ilustrar uma multi-escolha, sem serem as duas vizinhas.
+
+    Com tres ou mais pega a 1a e a 3a: um exemplo "1,2" sugere que so da para
+    marcar opcoes seguidas.
+    """
+    if len(pergunta.options) >= 3:
+        return pergunta.options[:3:2]
+    return pergunta.options[:2]
+
+
+def _entrada_interativa() -> bool:
+    """Tem alguem digitando do outro lado, ou a entrada vem de um arquivo?"""
+    try:
+        return bool(sys.stdin.isatty())
+    except (AttributeError, ValueError):
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +256,7 @@ def _pode_navegar(pergunta: Question) -> bool:
         return False
 
 
-def _perguntar_navegando(pergunta: Question) -> Any:
+def _perguntar_navegando(pergunta: Question, guiado: bool = False) -> Any:
     """Pergunta com setas, repetindo enquanto `validate()` recusar.
 
     O caso real de repeticao e a multi-escolha obrigatoria: da para confirmar
@@ -157,6 +265,10 @@ def _perguntar_navegando(pergunta: Question) -> Any:
     console.print()
     if pergunta.help:
         console.print(f"[dim]{escape(pergunta.help)}[/dim]")
+    if guiado:
+        exemplo = _exemplo_navegado(pergunta)
+        if exemplo:
+            console.print(f"[dim]{escape(exemplo)}[/dim]")
 
     while True:
         valor = _escolher(pergunta)
@@ -216,7 +328,24 @@ def _escolher(pergunta: Question) -> Any:
 # Saida
 # ---------------------------------------------------------------------------
 
-def _renderizar_enunciado(pergunta: Question) -> None:
+def _renderizar_enunciado(pergunta: Question, compacto: bool = False) -> None:
+    """Escreve a pergunta na tela antes de pedir a resposta digitada.
+
+    `compacto=True` e para quem respondeu "prefiro digitar": desenhar a lista
+    numerada logo depois disso seria ignorar a resposta. Mesmo assim as opcoes
+    validas continuam na tela, em uma linha so -- sem elas nao daria para
+    responder, e o que a pessoa recusou foi o MENU, nao o vocabulario.
+    """
+    if compacto:
+        # O titulo ja saiu junto da pergunta de formato.
+        print()
+        if pergunta.help:
+            print(pergunta.help)
+        if pergunta.options:
+            print(f"Opcoes: {', '.join(o.value for o in pergunta.options)}")
+        print()
+        return
+
     print()
     print("-" * LARGURA)
     print(pergunta.title)
@@ -233,20 +362,29 @@ def _renderizar_enunciado(pergunta: Question) -> None:
     print()
 
 
-def _texto_do_prompt(pergunta: Question) -> str:
+def _texto_do_prompt(pergunta: Question, guiado: bool = False) -> str:
     if pergunta.kind == "choice":
-        return f"Escolha [1-{len(pergunta.options)}]: "
-    if pergunta.kind == "multi_choice":
+        base = f"Escolha [1-{len(pergunta.options)}]"
+    elif pergunta.kind == "multi_choice":
         sufixo = " | vazio = nenhuma" if pergunta.allow_empty else ""
-        return f"Escolha (ex.: 1,3{sufixo}): "
-    if pergunta.kind == "confirm":
-        return "Confirmar? [s/N]: "
-    if pergunta.kind == "integer":
+        # No modo guiado este "ex.: 1,3" sai de cena: o exemplo vem do
+        # `_exemplo_digitado`, e dois exemplos na mesma linha so confundem.
+        base = "Escolha" if guiado else f"Escolha (ex.: 1,3{sufixo})"
+    elif pergunta.kind == "confirm":
+        base = "Confirmar? [s/N]"
+    elif pergunta.kind == "integer":
         faixa = ""
         if pergunta.min_value is not None and pergunta.max_value is not None:
             faixa = f" [{pergunta.min_value}-{pergunta.max_value}]"
-        return f"Resposta{faixa}: "
-    return "Resposta: "
+        base = f"Resposta{faixa}"
+    else:
+        base = "Resposta"
+
+    if guiado:
+        exemplo = _exemplo_digitado(pergunta)
+        if exemplo:
+            base = f"{base}  ({exemplo})"
+    return f"{base}: "
 
 
 # ---------------------------------------------------------------------------
