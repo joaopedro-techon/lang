@@ -48,6 +48,28 @@ pip install -e .
 
 Qualquer uma das duas cria o comando `custodia` no PATH do ambiente.
 
+O install já traz, sem extras:
+
+- **`langchain-anthropic`** e **`langchain-openai`** — ou seja, `AGENT_PROVIDER` pode
+  ser `anthropic`, `openai` ou `azure` sem instalar mais nada. Gemini, Bedrock e
+  Ollama continuam opcionais: `pip install "custodia-cli[google]"` (ou `[bedrock]`,
+  `[ollama]`).
+- **`iaragenai`** — o SDK interno da base de conhecimento, que **só existe no
+  Artifactory**. Dentro da rede da empresa, com o índice interno configurado, ele
+  resolve junto com o resto.
+
+> **Fora da rede da empresa** o `pip` falha ao procurar o `iaragenai` no PyPI público.
+> Para desenvolver assim, instale sem resolver dependências e traga o resto do
+> `requirements.txt` (onde a linha do `iaragenai` pode ser comentada):
+>
+> ```powershell
+> pip install -e . --no-deps
+> pip install -r requirements.txt
+> ```
+>
+> Sem o `iaragenai` o agente inteiro funciona — só a busca na KB fica indisponível,
+> avisando isso na conversa.
+
 > **Depois de um `git pull` que mexa nas dependências, rode `pip install -e .` de novo.**
 > Um install editável já existente aponta para o código novo, mas **não** instala
 > dependências novas sozinho — o sintoma é um `ModuleNotFoundError` num pacote que
@@ -89,6 +111,69 @@ AGENT_MODEL=claude-opus-5   # opcional
 
 Os comandos determinísticos (`/initialize`, `/status`) **não** usam LLM e continuam
 funcionando sem chave nenhuma — o agente só é ligado no primeiro turno de conversa.
+
+### Qual modelo responde (`AGENT_PROVIDER`)
+
+| `AGENT_PROVIDER` | Credencial | Vem no pacote base? |
+|---|---|---|
+| `iara` | `IARA_CLIENT_ID` + `IARA_CLIENT_SECRET` | ✅ |
+| `anthropic` *(padrão)* | `ANTHROPIC_API_KEY` | ✅ |
+| `openai` | `OPENAI_API_KEY` | ✅ |
+| `azure` | `AZURE_OPENAI_API_KEY` | ✅ |
+| `google` / `bedrock` / `ollama` | `GOOGLE_API_KEY` / profile AWS / — | extra (`pip install "custodia-cli[google]"`) |
+
+O `/status` mostra qual está valendo. Trocar de provedor é só mexer no `.env` — o
+grafo do agente não muda.
+
+### Gateway interno (IaraGenAI)
+
+Dentro da empresa é o caminho normal: o gateway autentica por `client_id`/`client_secret`
+e fala com Azure OpenAI, Bedrock ou Vertex do outro lado — sem chave de modelo e sem
+endpoint no `.env`.
+
+```
+AGENT_PROVIDER=iara
+AGENT_MODEL=gpt-4.1-mini      # opcional; este é o padrão
+IARA_CLIENT_ID=...
+IARA_CLIENT_SECRET=...
+IARA_ENVIRONMENT=dev          # dev | homol | prod
+IARA_PROVIDER=azure_openai    # azure_openai | bedrock | vertex
+```
+
+Por dentro, o agente usa o `ChatOpenAI` do LangChain e troca a fábrica de cliente do
+SDK da OpenAI pelo `IaraGenAI` (ver `llm.py`, `_ligar_gateway_iara`) — é o mesmo
+padrão do código de referência da organização. O **mesmo** cliente serve a busca na
+base de conhecimento, então `IARA_*` configura os dois de uma vez.
+
+Você **não** precisa configurar `OPENAI_API_KEY` aqui: com `AGENT_PROVIDER=iara` o
+agente força a sentinela `sk-no-key-required` no ambiente antes de montar o modelo,
+mesmo que haja uma chave real sobrando ali. Isso não é só limpeza — sem essa variável
+o `ChatOpenAI` sequer constrói o cliente interno, e o gateway nunca entraria no lugar
+dele.
+
+> O `IARA_CLIENT_SECRET` é credencial: mantenha no `.env` (que está no `.gitignore`)
+> ou nas variáveis de ambiente da sua conta — nunca no código.
+
+### Azure OpenAI
+
+Além da chave, o Azure exige a **versão da API** — ela é do endpoint, não do modelo,
+e o cliente nem inicializa sem ela (*"Must provide either the `api_version` argument
+or the `OPENAI_API_VERSION` environment variable"*). O agente já usa um padrão GA
+(`2024-10-21`); para fixar outra, preencha `AZURE_OPENAI_API_VERSION`.
+
+Se você configura as credenciais como **variáveis de ambiente da sua conta** (em vez
+do `.env`), defina o `OPENAI_API_KEY` junto — bibliotecas compatíveis com a API da
+OpenAI recusam iniciar sem essa variável, mesmo quando quem autentica é o Azure:
+
+```powershell
+[Environment]::SetEnvironmentVariable("AZURE_OPENAI_API_KEY", "<sua-chave>", "User")
+[Environment]::SetEnvironmentVariable("OPENAI_API_KEY", "sk-no-key-required", "User")
+```
+
+> Abra um terminal novo depois: variável de ambiente só entra em processo que nasce
+> depois dela. O agente também preenche essa sentinela sozinho em runtime quando a
+> variável está ausente **ou vazia** — o `setx` acima é para as outras ferramentas do
+> seu ambiente que leem a mesma variável.
 
 ## Uso
 

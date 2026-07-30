@@ -58,7 +58,11 @@ Q_PROVEDOR = Question(
             label=p.rotulo,
             description=(
                 f"modelo padrao: {p.modelo_padrao}"
-                + (f" | chave: {p.variavel_de_chave}" if p.variavel_de_chave else " | sem chave")
+                + (
+                    f" | chave: {' + '.join(p.variaveis_de_chave)}"
+                    if p.variaveis_de_chave
+                    else " | sem chave"
+                )
             ),
         )
         for p in PROVEDORES.values()
@@ -166,17 +170,24 @@ def _chaves_necessarias(provedor_nome: str) -> list[Chave]:
             nota="sentinela exigida por clientes compativeis com a API da OpenAI",
         ),
     ]
-    # A chave do provedor, quando ele tem uma e ela nao e a de cima -- senao
-    # o arquivo teria a mesma variavel duas vezes, uma ativa e uma comentada.
-    if provedor.variavel_de_chave and provedor.variavel_de_chave != "OPENAI_API_KEY":
+    # As credenciais do provedor, menos a OPENAI_API_KEY -- ela ja entrou
+    # acima, e repetir deixaria a mesma variavel duas vezes no arquivo, uma
+    # ativa e uma comentada.
+    for variavel in provedor.variaveis_de_chave:
+        if variavel == "OPENAI_API_KEY":
+            continue
         chaves.append(
             Chave(
-                provedor.variavel_de_chave,
+                variavel,
                 PLACEHOLDER,
                 comentada=True,
                 nota=f"credencial do {provedor.rotulo} -- descomente e cole a sua",
             )
         )
+    # Os ajustes proprios do provedor (versao de API, ambiente do gateway...),
+    # ja com o valor que o agente usa hoje.
+    for variavel, valor, nota in provedor.variaveis_opcionais:
+        chaves.append(Chave(variavel, valor, nota=nota))
     chaves.append(
         Chave("KB_ID", PLACEHOLDER, comentada=True, nota="id da KB na solucao interna de embedding")
     )

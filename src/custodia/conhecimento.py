@@ -13,15 +13,15 @@ Nao indexamos, nao quebramos documento em pedacos, nao geramos embedding: a
 base ja existe pronta. Nosso trabalho e consultar e devolver os trechos num
 formato que caiba no contexto do modelo.
 
-Este e o UNICO arquivo que fala com o SDK interno (`iaragenai`). Isso e
-proposital: quando a API interna mudar, muda so aqui -- a ferramenta em
-`tools.py`, o grafo e o prompt continuam iguais.
+Este e o unico arquivo que fala com a API de BUSCA do SDK interno
+(`iaragenai`). Isso e proposital: quando a API interna mudar, muda so aqui -- a
+ferramenta em `tools.py`, o grafo e o prompt continuam iguais. Quem constroi o
+cliente e o `iara.py`, compartilhado com o `llm.py`.
 
 >>> AJUSTE NA EMPRESA <<<
-Duas coisas nao dava para confirmar fora da rede interna, e estao marcadas com
-`AJUSTAR` no corpo do arquivo: como se constroi o cliente (`_cliente`) e a
-assinatura exata da chamada de busca (`_buscar`). O resto do arquivo nao depende
-do formato da resposta -- ver `_normalizar`.
+O que nao dava para confirmar fora da rede interna esta marcado com `AJUSTAR`
+no corpo do arquivo: a assinatura exata da chamada de busca (`_buscar`). O resto
+do arquivo nao depende do formato da resposta -- ver `_normalizar`.
 """
 
 from __future__ import annotations
@@ -30,6 +30,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from .config import KB_ID, KB_TOP_K, KB_VERSION_ID
+from .iara import IaraIndisponivel
+from .iara import cliente as cliente_iara
 
 
 class KBIndisponivel(RuntimeError):
@@ -58,38 +60,19 @@ def esta_configurada() -> bool:
 # A ponte com o SDK interno
 # ---------------------------------------------------------------------------
 
-# O cliente e caro de construir (autenticacao, sessao HTTP) e a conversa faz
-# varias buscas: criamos uma vez por processo.
-_cliente_cache: Any = None
-
-
 def _cliente() -> Any:
-    """Constroi (uma vez) o cliente do SDK interno.
+    """O cliente do SDK interno -- o MESMO que o modelo usa.
 
-    >>> AJUSTAR NA EMPRESA <<<
-    No exemplo que voce mandou, o cliente vinha de um helper da propria
-    aplicacao (`from src.app.dependencies import get_iara_client`). Aqui nao
-    temos esse helper, entao instanciamos direto. Se o SDK exigir parametros
-    (endpoint, credencial, tenant), acrescente-os na chamada abaixo -- de
-    preferencia lendo do .env via `config.py`, como o resto do agente faz.
+    A construcao (credencial, ambiente, cache do processo) mora em `iara.py`,
+    porque o `llm.py` precisa exatamente do mesmo cliente. Aqui so traduzimos o
+    erro para o vocabulario da KB: quem chama esta funcao trata `KBIndisponivel`
+    e continua a conversa sem a base, enquanto um `IaraIndisponivel` cru
+    derrubaria o turno.
     """
-    global _cliente_cache
-    if _cliente_cache is not None:
-        return _cliente_cache
-
     try:
-        from iaragenai import IaraGenAI  # type: ignore[import-not-found]
-    except ImportError as exc:
-        raise KBIndisponivel(
-            "pacote 'iaragenai' nao instalado neste ambiente "
-            "(vem do Artifactory interno)."
-        ) from exc
-
-    try:
-        _cliente_cache = IaraGenAI()
-    except Exception as exc:
-        raise KBIndisponivel(f"nao foi possivel autenticar no SDK interno: {exc}") from exc
-    return _cliente_cache
+        return cliente_iara()
+    except IaraIndisponivel as exc:
+        raise KBIndisponivel(str(exc)) from exc
 
 
 def _buscar(cliente: Any, texto_consulta: str, top_k: int) -> Any:

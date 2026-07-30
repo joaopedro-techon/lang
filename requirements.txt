@@ -2,7 +2,13 @@
 # Preferir `pip install -e .`, que tambem cria o comando `custodia`.
 langgraph>=0.2.57
 langchain-anthropic>=0.3.0
+langchain-openai>=0.2
 langchain-core>=0.3.0
 python-dotenv>=1.0.0
 rich>=13.0
 questionary>=2.0
+
+# SDK interno (classe IaraGenAI, base de conhecimento). So resolve com o indice
+# do Artifactory configurado -- fora da rede da empresa, comente esta linha: o
+# agente instala e roda sem ela, so a busca na KB fica indisponivel.
+iaragenai
