@@ -28,6 +28,7 @@ Este arquivo tem duas responsabilidades:
 
 from __future__ import annotations
 
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -41,6 +42,22 @@ from rich.text import Text
 
 from . import NOME, __version__
 from .chat import ChatIndisponivel, Conversa, loop_de_conversa
+from .config import KB_ID
+from .configurar import (
+    PLACEHOLDER,
+    Q_AMBIENTES,
+    Q_CONFIRMAR,
+    Q_METODO_AWS,
+    Q_PROVEDOR,
+    aplicar_ambiente,
+    aplicar_aws,
+    aplicar_env,
+    planejar_ambiente,
+    planejar_aws,
+    planejar_env,
+)
+from .conhecimento import esta_configurada
+from .llm import descrever_llm
 from .initialize import (
     STATUS_BLOQUEADO,
     STATUS_CANCELADO,
@@ -133,7 +150,183 @@ def cmd_initialize(root: Path) -> bool:
         return True
 
     _relatar_resultado(estado)
+    _nota_de_fluxo_deterministico()
     return True
+
+
+def cmd_config(root: Path) -> bool:
+    """Cria o esqueleto do .env e dos perfis da AWS."""
+    titulo("/config - prepara o ambiente do agente")
+
+    try:
+        provedor = perguntar_no_terminal(Q_PROVEDOR.to_dict())
+        ambientes = perguntar_no_terminal(Q_AMBIENTES.to_dict())
+        # So perguntamos o metodo se houver perfil a criar: quem nao marcou
+        # ambiente nenhum nao precisa responder sobre autenticacao da AWS.
+        metodo = (
+            perguntar_no_terminal(Q_METODO_AWS.to_dict()) if ambientes else "sso"
+        )
+    except WizardAbortado:
+        console.print("\n[yellow]/config cancelado. Nada foi escrito.[/yellow]\n")
+        return True
+
+    plano_env = planejar_env(provedor)
+    plano_aws = planejar_aws(ambientes, metodo)
+    plano_amb = planejar_ambiente()
+
+    pendencias = (
+        len(plano_env.faltando)
+        + len(plano_aws.faltando)
+        + (1 if plano_amb.tem_o_que_fazer else 0)
+    )
+    _mostrar_plano(plano_env, plano_aws, plano_amb)
+
+    if not pendencias:
+        console.print("\n[green]Nada a fazer: ja esta tudo configurado.[/green]\n")
+        _nota_de_fluxo_deterministico()
+        return True
+
+    try:
+        if not perguntar_no_terminal(Q_CONFIRMAR(pendencias).to_dict()):
+            console.print("\n[yellow]/config cancelado. Nada foi escrito.[/yellow]\n")
+            return True
+    except WizardAbortado:
+        console.print("\n[yellow]/config cancelado. Nada foi escrito.[/yellow]\n")
+        return True
+
+    try:
+        aplicar_env(plano_env)
+        aplicar_aws(plano_aws)
+        aplicar_ambiente(plano_amb)
+    except OSError as exc:
+        console.print(f"\n[red]Falha ao escrever:[/red] {escape(str(exc))}\n")
+        return True
+    except subprocess.CalledProcessError as exc:
+        # Arquivos ja foram escritos; so a variavel de usuario falhou.
+        console.print(
+            f"\n[yellow]Arquivos gravados, mas o setx falhou:[/yellow] "
+            f"{escape((exc.stderr or str(exc)).strip())}\n"
+        )
+
+    _relatar_config(plano_env, plano_aws, plano_amb)
+    _nota_de_fluxo_deterministico()
+    return True
+
+
+def _mostrar_plano(plano_env: Any, plano_aws: Any, plano_amb: Any) -> None:
+    """Mostra exatamente o que vai ser escrito, antes de escrever."""
+    console.print()
+    console.print("[bold]variavel de usuario do Windows[/bold]")
+    if not plano_amb.suportado:
+        console.print(
+            f"  [dim]- {plano_amb.nome}  (so no Windows; neste sistema use o "
+            "seu ~/.profile)[/dim]"
+        )
+    elif plano_amb.atual is not None:
+        console.print(f"  [dim]= {plano_amb.nome}  (ja definida, nao vou tocar)[/dim]")
+    else:
+        console.print(
+            f"  [green]+[/green] {plano_amb.nome}={plano_amb.valor}  "
+            "[dim](vale para qualquer processo seu, nao so o agente)[/dim]"
+        )
+
+    console.print()
+    console.print(f"[bold]{escape(str(plano_env.caminho))}[/bold]")
+    for nome in plano_env.ja_configuradas:
+        console.print(f"  [dim]= {nome}  (ja existe, nao vou tocar)[/dim]")
+    for chave in plano_env.faltando:
+        prefixo = "# " if chave.comentada else ""
+        console.print(f"  [green]+[/green] {prefixo}{chave.nome}={chave.valor}")
+
+    console.print()
+    console.print(f"[bold]{escape(str(plano_aws.caminho_config))}[/bold]")
+    # escape() obrigatorio: "[profile X]" e sintaxe de markup do rich, e sem
+    # escapar o nome do perfil some da tela em silencio.
+    for perfil in plano_aws.ja_configurados:
+        cabecalho = escape(f"[profile {perfil}]")
+        console.print(f"  [dim]= {cabecalho}  (ja existe, nao vou tocar)[/dim]")
+    for _, perfil in plano_aws.faltando:
+        cabecalho = escape(f"[profile {perfil}]")
+        console.print(f"  [green]+[/green] {cabecalho}  (esqueleto para preencher)")
+
+    if plano_aws.usa_credentials:
+        console.print()
+        console.print(f"[bold]{escape(str(plano_aws.caminho_credentials))}[/bold]")
+        for _, perfil in plano_aws.faltando:
+            console.print(
+                f"  [green]+[/green] {escape(f'[{perfil}]')}  "
+                "(chave estatica, comentada)"
+            )
+    elif plano_aws.faltando:
+        console.print(
+            "\n[dim]~/.aws/credentials nao sera tocado: no SSO a credencial e "
+            "temporaria e fica no cache do proprio aws-cli.[/dim]"
+        )
+
+
+def _relatar_config(plano_env: Any, plano_aws: Any, plano_amb: Any) -> None:
+    """O que fazer agora. Sem isto o /config entrega arquivo pela metade."""
+    console.print("\n[green]Esqueleto criado.[/green] Falta preencher:\n")
+
+    passo = 1
+    if plano_amb.tem_o_que_fazer:
+        console.print(
+            f"  {passo}. [bold]{plano_amb.nome}[/bold] foi gravada no seu perfil "
+            "do Windows.\n"
+            "       [dim]Ja vale nesta sessao, mas terminais e IDEs que ja "
+            "estavam abertos\n       so enxergam depois de reabrir.[/dim]"
+        )
+        passo += 1
+    if not plano_amb.suportado:
+        console.print(
+            f"  {passo}. Fora do Windows, ponha no seu ~/.profile (ou equivalente):\n"
+            f"       [dim]export {plano_amb.nome}={plano_amb.valor}[/dim]"
+        )
+        passo += 1
+    a_preencher = [c for c in plano_env.faltando if c.comentada and c.valor == PLACEHOLDER]
+    if a_preencher:
+        console.print(f"  {passo}. Em {escape(str(plano_env.caminho))}:")
+        for chave in a_preencher:
+            console.print(f"       descomente [bold]{chave.nome}[/bold] e ponha o valor")
+        passo += 1
+
+    if plano_aws.faltando and not plano_aws.usa_credentials:
+        console.print(f"  {passo}. Em {escape(str(plano_aws.caminho_config))}:")
+        for _, perfil in plano_aws.faltando:
+            console.print(f"       complete o SSO de [bold]{perfil}[/bold], e entao:")
+            # soft_wrap para o comando nao quebrar no meio: linha partida nao
+            # se copia, e copiar isto e exatamente o que a pessoa vai fazer.
+            console.print(
+                f"         [dim]aws sso login --profile {perfil}[/dim]", soft_wrap=True
+            )
+        passo += 1
+    elif plano_aws.faltando:
+        console.print(f"  {passo}. Em {escape(str(plano_aws.caminho_credentials))}:")
+        for _, perfil in plano_aws.faltando:
+            console.print(
+                f"       descomente a secao {escape(f'[{perfil}]')} e cole as chaves"
+            )
+        console.print(
+            "       [dim]a chave estatica nao expira -- trate o arquivo como "
+            "segredo e prefira SSO se a area permitir.[/dim]"
+        )
+        passo += 1
+
+    console.print(
+        f"\n  {passo}. Confira com [bold]/status[/bold] "
+        "[dim](e /infra, que checa os perfis de verdade na AWS).[/dim]\n"
+    )
+
+
+def _nota_de_fluxo_deterministico() -> None:
+    """Fecha um wizard dizendo que ele nao custou token nenhum.
+
+    Nao e enfeite: os wizards (/initialize, /infra) sao grafos deterministicos
+    -- perguntam, validam e escrevem arquivo, sem passar por modelo. Como a
+    conversa mostra o gasto a cada volta, deixar o zero implicito aqui daria a
+    impressao de que todo o agente cobra por uso.
+    """
+    console.print("[dim]  0 tokens -- fluxo deterministico, sem chamada ao modelo.[/dim]\n")
 
 
 def cmd_infra(root: Path) -> bool:
@@ -175,6 +368,7 @@ def cmd_infra(root: Path) -> bool:
         return True
 
     _relatar_infra(estado)
+    _nota_de_fluxo_deterministico()
     return True
 
 
@@ -206,6 +400,19 @@ def _relatar_infra(estado: dict[str, Any]) -> None:
 
 def cmd_status(root: Path) -> bool:
     """Mostra a spec ja salva no projeto, se houver."""
+    # Antes da spec: quem vai responder e se a base de conhecimento esta ligada.
+    # Configuracao de LLM e de KB e o que mais da problema silencioso na
+    # primeira instalacao, entao aparece sem precisar abrir o .env.
+    print(f"\nLLM                    : {descrever_llm()}")
+    print(
+        "Base de conhecimento   : "
+        + (f"KB {KB_ID}" if esta_configurada() else "nao configurada (KB_ID vazio)")
+    )
+    # O contador da sessao inteira. Enquanto so rodarem wizards ele fica em
+    # zero -- e essa e a leitura util: o custo aparece so quando alguem
+    # conversa, porque so a conversa chama o modelo.
+    print(f"Tokens nesta sessao    : {_CONVERSA.uso_da_sessao.resumo()}")
+
     try:
         spec = load_spec(root)
     except SpecError as exc:
@@ -258,6 +465,12 @@ _COMANDOS_UNICOS: tuple[Comando, ...] = (
         "Conversa com o agente: duvidas ou alteracoes no codigo.",
         cmd_chat,
         apelidos=("/conversar",),
+    ),
+    Comando(
+        "/config",
+        "Cria o esqueleto do .env e dos perfis da AWS que o agente precisa.",
+        cmd_config,
+        apelidos=("/configurar",),
     ),
     Comando(
         "/initialize",

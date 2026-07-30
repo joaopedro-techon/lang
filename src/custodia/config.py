@@ -1,5 +1,10 @@
 """Configuracao central do agente.
 
+Todo `os.getenv` do projeto passa por aqui, e nao e so organizacao: e este
+arquivo que chama `load_dotenv()`. Um modulo que lesse o ambiente por conta
+propria, antes de importar este, leria o ambiente ANTES do .env ser carregado
+-- e enxergaria variavel vazia sem motivo aparente.
+
 O `project_root` e um estado global do processo: definimos ele uma vez
 (no `main.py`, a partir do argumento de linha de comando) e as ferramentas
 em `tools.py` resolvem todos os caminhos contra ele. Isso garante que o
@@ -20,9 +25,85 @@ from dotenv import find_dotenv, load_dotenv
 load_dotenv(find_dotenv(usecwd=True))
 load_dotenv()
 
-# Modelo Claude usado pelo agente. claude-opus-5 e o mais capaz para
-# tarefas de codigo/edicao de arquivos.
-MODEL_NAME: str = os.getenv("AGENT_MODEL", "claude-opus-5")
+# Sentinela da OPENAI_API_KEY.
+#
+# Clientes compativeis com a API da OpenAI costumam EXIGIR que a variavel
+# exista -- eles recusam inicializar sem ela -- mesmo quando o endpoint do
+# outro lado nao autentica nada. Como a exigencia vem da BIBLIOTECA e nao do
+# modelo escolhido, ela vale para qualquer AGENT_PROVIDER: um projeto rodando
+# em Claude pode importar uma lib que estoura no import por falta dessa chave.
+#
+# `setdefault` e o ponto principal: se ja houver chave de verdade no ambiente
+# ou no .env, ela ganha. A sentinela so preenche o vazio, nunca sobrescreve
+# credencial.
+OPENAI_SENTINEL = "sk-no-key-required"
+os.environ.setdefault("OPENAI_API_KEY", OPENAI_SENTINEL)
+
+def _inteiro(nome: str, padrao: int) -> int:
+    """Le um inteiro do ambiente sem derrubar a CLI se vier lixo no .env.
+
+    Um typo em KB_TOP_K nao deveria impedir o /initialize de rodar, entao
+    caimos no padrao em silencio em vez de estourar no import.
+    """
+    bruto = os.getenv(nome)
+    if not bruto:
+        return padrao
+    try:
+        return int(bruto)
+    except ValueError:
+        return padrao
+
+
+def _booleano(nome: str, padrao: bool) -> bool:
+    """Le uma flag do ambiente. Ausente ou vazia = o padrao."""
+    bruto = os.getenv(nome)
+    if not bruto:
+        return padrao
+    return bruto.strip().lower() in ("1", "true", "sim", "yes", "on")
+
+
+# ---------------------------------------------------------------------------
+# O LLM
+# ---------------------------------------------------------------------------
+# O catalogo de provedores esta em `llm.py`; aqui so lemos a escolha do .env.
+
+# Quem responde: anthropic, openai, azure, google, bedrock, ollama.
+AGENT_PROVIDER: str = os.getenv("AGENT_PROVIDER", "anthropic")
+
+# Modelo. Vazio = usa o padrao do provedor escolhido (ver `llm.PROVEDORES`).
+AGENT_MODEL: str = os.getenv("AGENT_MODEL", "")
+
+# Teto de tokens da resposta do modelo.
+AGENT_MAX_TOKENS: int = _inteiro("AGENT_MAX_TOKENS", 16_000)
+
+# Quantas vezes o SDK repete uma chamada que falhou por motivo transitorio
+# (429, 5xx, queda de conexao). O padrao dos SDKs e 2, que nao segura pico de
+# sobrecarga do provedor -- e no loop ReAct uma volta que morre joga fora o
+# turno inteiro, entao vale insistir mais.
+AGENT_MAX_RETRIES: int = _inteiro("AGENT_MAX_RETRIES", 6)
+
+# Endpoint alternativo: e por aqui que se aponta para um gateway interno
+# compativel com a API do provedor. Vazio = endpoint publico padrao.
+AGENT_BASE_URL: str = os.getenv("AGENT_BASE_URL", "")
+
+# Cache de prompt. O loop ReAct reenvia todo o historico a cada volta, entao
+# cachear o prefixo e o que mais corta custo aqui. Desligue so para comparar
+# o gasto com e sem (o /chat mostra os tokens de cache no fim de cada turno).
+AGENT_PROMPT_CACHE: bool = _booleano("AGENT_PROMPT_CACHE", True)
+
+
+# ---------------------------------------------------------------------------
+# A base de conhecimento (RAG)
+# ---------------------------------------------------------------------------
+# Identificadores da KB na solucao interna de embedding. Sem KB_ID a ferramenta
+# `buscar_conhecimento` se declara indisponivel, em vez de falhar no meio da
+# conversa.
+
+KB_ID: str = os.getenv("KB_ID", "")
+# Versao fixa da KB. Vazio = a solucao interna decide (normalmente a atual).
+KB_VERSION_ID: str = os.getenv("KB_VERSION_ID", "")
+# Quantos trechos trazer por busca. Mais que isso costuma so inflar o contexto.
+KB_TOP_K: int = _inteiro("KB_TOP_K", 5)
 
 # Raiz do projeto Spring Boot que o agente vai configurar.
 # Definido em runtime via set_project_root().

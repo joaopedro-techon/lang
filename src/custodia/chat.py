@@ -10,13 +10,13 @@ Ele guarda duas coisas que o REPL sozinho nao teria:
    ferramenta na hora -- e o dev enxerga o agente lendo o projeto.
 
 O grafo so e construido no PRIMEIRO turno (`_garantir_grafo`). Isso mantem o
-/initialize e o /status funcionando sem chave da Anthropic: quem precisa de LLM
-e a conversa, nao o wizard.
+/initialize e o /status funcionando sem credencial de LLM nenhuma: quem precisa
+de modelo e a conversa, nao o wizard.
 """
 
 from __future__ import annotations
 
-import os
+from dataclasses import dataclass
 from typing import Any
 
 from langchain_core.messages import HumanMessage
@@ -26,6 +26,7 @@ from rich.padding import Padding
 
 from . import NOME
 from .graph import build_graph
+from .llm import LLMIndisponivel, verificar_credenciais
 from .ui import console
 
 # Quanto do retorno de uma ferramenta aparece na tela. O modelo recebe tudo;
@@ -46,6 +47,10 @@ class Conversa:
     def __init__(self) -> None:
         self._grafo: Any = None
         self._mensagens: list[Any] = []
+        # Gasto acumulado da sessao inteira. Fica FORA do historico de
+        # proposito: o /limpar esquece a conversa, mas os tokens ja foram
+        # cobrados -- zerar aqui seria mentir sobre o custo.
+        self.uso_da_sessao = Uso()
 
     # -- ciclo de vida -----------------------------------------------------
 
@@ -54,14 +59,20 @@ class Conversa:
         if self._grafo is not None:
             return self._grafo
 
-        if not os.getenv("ANTHROPIC_API_KEY"):
-            raise ChatIndisponivel(
-                "ANTHROPIC_API_KEY nao definida.\n"
-                "Copie o .env.example para .env e preencha a chave "
-                "(https://console.anthropic.com/settings/keys)."
-            )
+        # Qual credencial falta depende do provedor escolhido no .env, entao
+        # quem responde isso e o `llm.py` -- aqui so repassamos a mensagem.
+        try:
+            faltando = verificar_credenciais()
+        except LLMIndisponivel as exc:  # AGENT_PROVIDER invalido
+            raise ChatIndisponivel(str(exc)) from exc
+        if faltando:
+            raise ChatIndisponivel(faltando)
+
         try:
             self._grafo = build_graph()
+        except LLMIndisponivel as exc:
+            # Ja vem com mensagem acionavel (pacote faltando, modelo recusado).
+            raise ChatIndisponivel(str(exc)) from exc
         except Exception as exc:  # erro de credencial/config na montagem
             raise ChatIndisponivel(f"nao foi possivel iniciar o agente: {exc}") from exc
         return self._grafo
@@ -90,6 +101,7 @@ class Conversa:
         entrada = [*self._mensagens, HumanMessage(content=texto)]
         ja_exibidas = len(entrada)
         final = entrada
+        do_turno = Uso()
 
         # O spinner so gira enquanto esperamos o MODELO. Antes do no de
         # ferramentas ele e desligado de proposito: `write_file` e `run_maven`
@@ -103,6 +115,12 @@ class Conversa:
                 mensagens = estado["messages"]
                 for mensagem in mensagens[ja_exibidas:]:
                     _renderizar(mensagem)
+                    # Somado aqui, e nao no fim: um turno interrompido no meio
+                    # tambem gastou, e o total da sessao tem que refletir isso.
+                    parcial = _uso_da_mensagem(mensagem)
+                    if parcial is not None:
+                        do_turno += parcial
+                        self.uso_da_sessao += parcial
                 ja_exibidas = len(mensagens)
                 final = mensagens
                 if not _vai_chamar_ferramenta(mensagens):
@@ -111,10 +129,14 @@ class Conversa:
             console.print("\n[yellow]  (interrompido -- o historico ate aqui foi mantido)[/yellow]")
             return
         except Exception as exc:
-            console.print(f"\n[red]  Erro ao falar com o modelo:[/red] {escape(str(exc))}\n")
+            console.print(f"\n[red]  Erro ao falar com o modelo:[/red] {_explicar_erro(exc)}\n")
             return
         finally:
+            # No `finally` para o total sair tambem quando o turno falha ou e
+            # interrompido -- justamente os casos em que dai vontade de saber
+            # quanto ja tinha sido gasto.
             pensando.stop()
+            _renderizar_total_do_turno(do_turno)
 
         self._mensagens = list(final)
 
@@ -149,6 +171,16 @@ def _renderizar(mensagem: Any) -> None:
             # O modelo responde em Markdown; renderizar de verdade e o que
             # transforma **negrito** e blocos de codigo em algo legivel.
             console.print(Padding(Markdown(texto), (0, 0, 0, 2)))
+        # O custo desta volta do loop, antes das ferramentas que ela pediu:
+        # assim a chamada e o resultado dela seguem visualmente colados, e da
+        # para ver o prompt engordando a cada volta.
+        uso = _uso_da_mensagem(mensagem)
+        if uso is not None:
+            detalhe = f"{_milhar(uso.entrada)} entrada"
+            if uso.cache:
+                detalhe += f" ({_milhar(uso.cache)} do cache)"
+            detalhe += f" · {_milhar(uso.saida)} saida"
+            console.print(f"  [dim]· {detalhe}[/dim]")
         for chamada in chamadas:
             nome = escape(str(chamada.get("name", "?")))
             args = _argumentos(chamada.get("args"))
@@ -174,11 +206,109 @@ def _renderizar_resultado(mensagem: Any) -> None:
     console.print(f"    [dim]└[/dim] [{cor}]{escape(primeira + sufixo)}[/{cor}]")
 
 
+# Falhas que sao do PROVEDOR, nao do que mandamos: o SDK ja repetiu
+# AGENT_MAX_RETRIES vezes com backoff antes de chegar aqui, entao ver uma
+# destas significa que o problema durou mais que a janela de retentativa.
+_STATUS_TRANSITORIO = {
+    429: "limite de requisicoes do provedor atingido",
+    500: "erro interno do provedor",
+    502: "gateway do provedor com problema",
+    503: "provedor indisponivel no momento",
+    529: "provedor sobrecarregado",
+}
+
+
+def _explicar_erro(exc: Exception) -> str:
+    """Traduz falha conhecida do provedor; o que nao reconhecemos vai cru.
+
+    O `status_code` e lido por duck typing de proposito: os SDKs da Anthropic
+    e da OpenAI expoem esse atributo nas excecoes de HTTP, e assim a traducao
+    funciona nos dois sem este arquivo importar nenhum dos dois.
+    """
+    motivo = _STATUS_TRANSITORIO.get(getattr(exc, "status_code", None))
+    if motivo is None:
+        return escape(str(exc))
+    return (
+        f"{motivo}.\n"
+        "  E do lado do provedor, nao da sua pergunta -- o SDK ja repetiu a\n"
+        "  chamada sozinho e nao adiantou. Espere um pouco e mande de novo: a\n"
+        "  conversa anterior foi mantida, so esta pergunta nao entrou no\n"
+        "  historico."
+    )
+
+
+def _milhar(valor: int) -> str:
+    """1234 -> '1.2k'. So para caber numa linha discreta."""
+    return f"{valor / 1000:.1f}k" if valor >= 1000 else str(valor)
+
+
+@dataclass
+class Uso:
+    """Tokens gastos: uma chamada ao modelo, um turno ou a sessao inteira.
+
+    Sao os tres niveis que interessam, e a mesma estrutura serve para todos --
+    somar dois `Uso` sobe de nivel. `chamadas` importa porque no loop ReAct um
+    unico turno vira varias idas ao modelo, e e isso que explica a conta.
+    """
+
+    chamadas: int = 0
+    entrada: int = 0
+    cache: int = 0
+    saida: int = 0
+
+    def __iadd__(self, outro: "Uso") -> "Uso":
+        self.chamadas += outro.chamadas
+        self.entrada += outro.entrada
+        self.cache += outro.cache
+        self.saida += outro.saida
+        return self
+
+    @property
+    def houve_chamada(self) -> bool:
+        return self.chamadas > 0
+
+    def resumo(self) -> str:
+        """Uma linha com o gasto. Sem markup: quem imprime decide o estilo."""
+        if not self.houve_chamada:
+            return "0 -- nenhuma chamada ao modelo"
+        entrada = f"{_milhar(self.entrada)} entrada"
+        # O cache vai entre parenteses porque e uma PARTE da entrada, nao uma
+        # parcela a mais -- separado por "·" alguem soma os dois e reporta
+        # errado. E so aparece quando houve: provedor que nao reporta cache
+        # mostraria "0 do cache" e pareceria defeito, nao ausencia de dado.
+        if self.cache:
+            entrada += f" ({_milhar(self.cache)} do cache)"
+        chamadas = "1 chamada" if self.chamadas == 1 else f"{self.chamadas} chamadas"
+        return f"{chamadas} · {entrada} · {_milhar(self.saida)} saida"
+
+
+def _uso_da_mensagem(mensagem: Any) -> Uso | None:
+    """Extrai o gasto de UMA resposta do modelo. None se o provedor nao reporta."""
+    bruto = getattr(mensagem, "usage_metadata", None)
+    if not bruto:
+        return None
+    detalhes = bruto.get("input_token_details") or {}
+    return Uso(
+        chamadas=1,
+        entrada=bruto.get("input_tokens", 0),
+        cache=detalhes.get("cache_read", 0),
+        saida=bruto.get("output_tokens", 0),
+    )
+
+
+def _renderizar_total_do_turno(uso: Uso) -> None:
+    """Fecha o turno com o total. Silencioso se o modelo nem foi chamado."""
+    if not uso.houve_chamada:
+        return
+    console.print(f"\n  [dim]total do turno: {uso.resumo()}[/dim]")
+
+
 def _texto(mensagem: Any) -> str:
     """Extrai o texto de uma mensagem.
 
-    O `content` da Anthropic pode vir como string OU como lista de blocos
-    (texto, tool_use, thinking...). Aqui juntamos so os blocos de texto.
+    O `content` varia por provedor: a OpenAI manda uma string simples, a
+    Anthropic manda uma lista de blocos (texto, tool_use, thinking...). Tratar
+    os dois casos e o que deixa a renderizacao funcionar com qualquer LLM.
     """
     conteudo = getattr(mensagem, "content", "")
     if isinstance(conteudo, str):

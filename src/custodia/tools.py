@@ -1,6 +1,6 @@
 """Ferramentas que o agente pode chamar.
 
-Cada funcao decorada com @tool vira uma "ferramenta" que o Claude pode
+Cada funcao decorada com @tool vira uma "ferramenta" que o modelo pode
 invocar. A descricao (docstring) e o schema (type hints) sao lidos pelo
 modelo para decidir QUANDO e COMO chamar cada uma.
 
@@ -23,10 +23,16 @@ from rich.syntax import Syntax
 from rich.text import Text
 
 from .config import get_project_root, is_auto_approve, resolve_inside_project
+from .conhecimento import KBIndisponivel, consultar
 from .ui import console
 
 # Limite para nao estourar o contexto do modelo com arquivos gigantes.
 MAX_READ_CHARS = 60_000
+
+# Quanto de cada trecho da base de conhecimento vai para o contexto. Trecho
+# recuperado e o que mais infla o prompt: sem teto, uma consulta ampla come o
+# orcamento do turno inteiro.
+MAX_TRECHO_CHARS = 2_000
 
 # Quantas linhas do conteudo aparecem na previa de aprovacao.
 LINHAS_DE_PREVIA = 20
@@ -231,6 +237,47 @@ def run_maven(goals: str = "validate") -> str:
     return f"[{status}]\n{saida}"
 
 
+@tool
+def buscar_conhecimento(consulta: str, limite: int = 0) -> str:
+    """Busca na base de conhecimento da area (arquitetura de referencia).
+
+    Use para duvidas sobre PADROES e DECISOES da area: arquitetura de
+    referencia, convencoes de projeto, formato dos eventos de auditoria,
+    nomenclatura de filas. NAO use para duvidas sobre o codigo deste
+    repositorio -- para isso use `list_directory` e `read_file`.
+
+    Escreva a consulta com os termos do dominio, como voce perguntaria a um
+    colega da area ("como o worker publica evento de auditoria"). Se o
+    resultado nao responder, busque de novo com outras palavras antes de
+    desistir.
+
+    `limite` e quantos trechos trazer; 0 usa o padrao configurado.
+    """
+    try:
+        trechos = consultar(consulta, limite=limite)
+    except KBIndisponivel as exc:
+        # Vira texto (e nao excecao) de proposito: o modelo le o erro, avisa o
+        # desenvolvedor e segue com o que sabe, em vez de derrubar o turno.
+        return f"ERRO: {exc}"
+
+    if not trechos:
+        return (
+            "Nenhum trecho encontrado na base para essa consulta. "
+            "Tente outros termos ou assuma que a base nao cobre o assunto."
+        )
+
+    blocos: list[str] = []
+    for indice, trecho in enumerate(trechos, start=1):
+        texto = trecho.texto
+        if len(texto) > MAX_TRECHO_CHARS:
+            texto = texto[:MAX_TRECHO_CHARS] + "\n... [TRUNCADO]"
+        cabecalho = f"[{indice}] {trecho.origem}"
+        if trecho.score is not None:
+            cabecalho += f"  (score {trecho.score:.3f})"
+        blocos.append(f"{cabecalho}\n{texto}")
+    return "\n\n---\n\n".join(blocos)
+
+
 # Lista exportada para o grafo montar o ToolNode.
 ALL_TOOLS = [
     list_directory,
@@ -238,4 +285,5 @@ ALL_TOOLS = [
     write_file,
     create_directory,
     run_maven,
+    buscar_conhecimento,
 ]

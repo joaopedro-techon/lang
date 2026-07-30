@@ -10,19 +10,22 @@ orquestracao em vez de usar uma caixa-preta:
                               v
                              END
 
-- "assistant": chama o Claude com as ferramentas disponiveis.
-- "tools": executa as ferramentas que o Claude pediu e devolve os resultados.
+- "assistant": chama o modelo com as ferramentas disponiveis.
+- "tools": executa as ferramentas que o modelo pediu e devolve os resultados.
 - A aresta condicional decide se continua chamando ferramentas ou termina.
+
+Nada aqui sabe QUAL modelo esta respondendo: `build_llm()` (em `llm.py`) le o
+provedor do .env e devolve um chat model do LangChain, e o loop abaixo funciona
+igual com Claude, GPT, Gemini ou um modelo local.
 """
 
 from __future__ import annotations
 
-from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import SystemMessage
 from langgraph.graph import END, START, StateGraph, MessagesState
 from langgraph.prebuilt import ToolNode, tools_condition
 
-from .config import MODEL_NAME
+from .llm import build_llm_com_tools
 from .prompts import SYSTEM_PROMPT
 from .tools import ALL_TOOLS
 
@@ -30,13 +33,12 @@ from .tools import ALL_TOOLS
 def build_graph():
     """Constroi e compila o grafo do agente."""
 
-    # O modelo, com as ferramentas "amarradas" a ele. Assim o Claude sabe
-    # quais ferramentas existem e pode pedir para chama-las.
-    llm = ChatAnthropic(model=MODEL_NAME, max_tokens=16_000)
-    llm_com_tools = llm.bind_tools(ALL_TOOLS)
+    # O modelo, com as ferramentas "amarradas" a ele (assim ele sabe quais
+    # existem e pode pedir para chama-las) e com o cache de prompt ligado.
+    llm_com_tools = build_llm_com_tools(ALL_TOOLS)
 
     def assistant(state: MessagesState) -> dict:
-        """No do modelo: injeta o system prompt e chama o Claude."""
+        """No do modelo: injeta o system prompt e chama o LLM."""
         mensagens = [SystemMessage(content=SYSTEM_PROMPT), *state["messages"]]
         resposta = llm_com_tools.invoke(mensagens)
         return {"messages": [resposta]}

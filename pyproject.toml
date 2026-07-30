@@ -17,6 +17,9 @@ classifiers = ["Private :: Do Not Upload"]
 dependencies = [
     # interrupt()/Command com a API atual: langgraph >= 0.2.57
     "langgraph>=0.2.57",
+    # O agente fala com qualquer provedor (ver custodia/llm.py). Apenas o
+    # provedor PADRAO entra aqui; os outros sao extras opcionais mais abaixo,
+    # para nao arrastar quatro SDKs para quem usa um.
     "langchain-anthropic>=0.3.0",
     "langchain-core>=0.3.0",
     "python-dotenv>=1.0.0",
@@ -30,9 +33,23 @@ dependencies = [
 [project.scripts]
 custodia = "custodia.main:main"
 
-# Ferramentas de empacotamento/publicacao: `pip install -e ".[dev]"`
 [project.optional-dependencies]
+# Ferramentas de empacotamento/publicacao: `pip install -e ".[dev]"`
 dev = ["build>=1.0", "twine>=5.0"]
+
+# Provedores de LLM alternativos. Instale so o que voce vai usar:
+#   pip install "custodia-cli[openai]"
+# O nome do extra e o mesmo valor que vai em AGENT_PROVIDER no .env.
+openai = ["langchain-openai>=0.2"]
+azure = ["langchain-openai>=0.2"]
+google = ["langchain-google-genai>=2.0"]
+bedrock = ["langchain-aws>=0.2"]
+ollama = ["langchain-ollama>=0.2"]
+
+# Base de conhecimento (RAG). O `iaragenai` vem do Artifactory interno e nao
+# existe no PyPI publico -- por isso fica como extra: sem ele o resto do agente
+# instala e roda normalmente, so a busca na KB fica indisponivel.
+rag = ["iaragenai"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
