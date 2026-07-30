@@ -9,6 +9,12 @@ __pycache__/
 venv/
 env/
 
+# Artefatos de empacotamento (`python -m build`). Sao copias do src/ que
+# envelhecem sozinhas: uma vez commitadas, viram codigo antigo se passando por
+# codigo do projeto.
+build/
+dist/
+
 # IDEs
 .idea/
 .vscode/

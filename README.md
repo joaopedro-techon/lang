@@ -186,6 +186,10 @@ Sem argumento, ele usa a pasta atual. Dá para passar um caminho:
 `custodia C:\dev\meu-repo`. Sem depender do PATH, funciona igual com
 `python -m custodia`.
 
+Com `--yes` (em qualquer posição), as ferramentas destrutivas — escrever arquivo,
+rodar `mvn` — **não** param para pedir confirmação. Útil quando você já sabe o que
+vai acontecer; fora isso, prefira aprovar uma a uma.
+
 ```
 ==============================================================
   Custod.IA 0.2.0

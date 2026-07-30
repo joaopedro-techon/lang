@@ -83,7 +83,7 @@ from .questions import (
     pergunta_vazao,
     validate,
 )
-from .terraform import Ambiente, escrever_infra, localizar_infra
+from .terraform import Ambiente, escrever_infra
 
 STATUS_BLOQUEADO = "blocked"
 STATUS_CANCELADO = "cancelled"
