@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from pathlib import Path
 from typing import Any
 
 from langchain_core.tools import tool
@@ -36,6 +37,53 @@ MAX_TRECHO_CHARS = 2_000
 
 # Quantas linhas do conteudo aparecem na previa de aprovacao.
 LINHAS_DE_PREVIA = 20
+
+# Quantos nomes acompanham um erro de "caminho nao existe". O suficiente para o
+# modelo se localizar, sem despejar uma pasta inteira no contexto.
+MAX_ITENS_NA_DICA = 30
+
+
+def _rotulo(caminho: Path) -> str:
+    """O caminho como o modelo o escreveu: relativo a raiz, com barra normal."""
+    root = get_project_root()
+    if caminho == root:
+        return "."
+    return caminho.relative_to(root).as_posix()
+
+
+def _pasta_existente_mais_proxima(alvo: Path) -> Path:
+    """Sobe do alvo ate achar uma pasta que exista, sem passar da raiz."""
+    root = get_project_root()
+    atual = alvo
+    while atual != root and root in atual.parents:
+        if atual.is_dir():
+            return atual
+        atual = atual.parent
+    return root
+
+
+def _onde_procurar(alvo: Path) -> str:
+    """O que EXISTE perto do caminho que nao existe.
+
+    Sem isto, um caminho errado vira um beco sem saida: a ferramenta responde
+    "nao existe" e o modelo, sem nenhuma informacao nova, tende a chutar de
+    novo. Acontece direto nos repositorios da area, onde o projeto Maven mora
+    em `app/` e o palpite natural de quem conhece Spring Boot -- `src` -- nao
+    existe na raiz. Devolvendo a vizinhanca, ele se corrige no mesmo turno.
+    """
+    pasta = _pasta_existente_mais_proxima(alvo)
+    try:
+        itens = sorted(pasta.iterdir(), key=lambda p: (p.is_file(), p.name))
+    except OSError:  # permissao negada, disco removido...
+        return ""
+    if not itens:
+        return f"'{_rotulo(pasta)}' esta vazia."
+
+    nomes = [f"{i.name}/" if i.is_dir() else i.name for i in itens[:MAX_ITENS_NA_DICA]]
+    resto = len(itens) - len(nomes)
+    if resto > 0:
+        nomes.append(f"... (+{resto})")
+    return f"Em '{_rotulo(pasta)}' existem: {', '.join(nomes)}"
 
 
 def _confirmar(titulo: str, corpo: Any = None) -> bool:
@@ -83,24 +131,27 @@ def _confirmar(titulo: str, corpo: Any = None) -> bool:
 def list_directory(path: str = ".") -> str:
     """Lista arquivos e pastas dentro do projeto (relativo a raiz do projeto).
 
-    Use para explorar a estrutura antes de decidir mudancas.
-    `path` e relativo a raiz do projeto (ex.: "." ou "src/main/java").
+    Use para explorar a estrutura antes de decidir mudancas. Comece por "."
+    para ver a raiz: o projeto Maven nem sempre esta la (nos repositorios desta
+    area ele costuma ficar em `app/`, com o codigo em `app/src/main/java`).
     """
     try:
         target = resolve_inside_project(path)
     except (PermissionError, RuntimeError) as exc:
         return f"ERRO: {exc}"
     if not target.exists():
-        return f"ERRO: caminho nao existe: {path}"
+        return f"ERRO: caminho nao existe: {path}\n{_onde_procurar(target)}".rstrip()
     if not target.is_dir():
         return f"ERRO: nao e um diretorio: {path}"
 
-    root = get_project_root()
     linhas: list[str] = []
     for item in sorted(target.iterdir(), key=lambda p: (p.is_file(), p.name)):
-        rel = item.relative_to(root)
+        # Sempre com barra normal: no Windows o `relative_to` devolveria
+        # "app\src\main", e e esse texto que o modelo copia de volta como
+        # argumento da proxima chamada. Um so formato evita que ele misture os
+        # dois no mesmo caminho.
         marcador = "/" if item.is_dir() else ""
-        linhas.append(f"{rel}{marcador}")
+        linhas.append(f"{_rotulo(item)}{marcador}")
     return "\n".join(linhas) if linhas else "(vazio)"
 
 
@@ -114,8 +165,12 @@ def read_file(path: str) -> str:
         target = resolve_inside_project(path)
     except (PermissionError, RuntimeError) as exc:
         return f"ERRO: {exc}"
+    if target.is_dir():
+        return f"ERRO: isto e um diretorio, nao um arquivo: {path}"
     if not target.is_file():
-        return f"ERRO: arquivo nao encontrado: {path}"
+        return (
+            f"ERRO: arquivo nao encontrado: {path}\n{_onde_procurar(target)}"
+        ).rstrip()
     try:
         conteudo = target.read_text(encoding="utf-8")
     except UnicodeDecodeError:
@@ -198,20 +253,68 @@ def create_directory(path: str) -> str:
     return f"OK: pasta criada: {path}"
 
 
+def _pastas_com_pom() -> list[Path]:
+    """Onde ha um pom.xml: a raiz, ou as subpastas de primeiro nivel.
+
+    Nos repositorios da area o pom quase nunca esta na raiz -- o projeto Maven
+    fica em `app/`, ao lado de `infra/`, `docs/` e afins. Rodar o mvn na raiz
+    ali morre com "there is no POM in this directory", que nao diz ao modelo o
+    que fazer em seguida.
+
+    Um nivel de profundidade e de proposito: e onde o pom esta nesse layout, e
+    varrer o repositorio inteiro traria os poms de exemplo e de teste junto.
+    """
+    root = get_project_root()
+    if (root / "pom.xml").is_file():
+        return [root]
+    return sorted(
+        pasta
+        for pasta in root.iterdir()
+        if pasta.is_dir()
+        and not pasta.name.startswith(".")
+        and (pasta / "pom.xml").is_file()
+    )
+
+
 @tool
-def run_maven(goals: str = "validate") -> str:
-    """Executa um comando Maven na raiz do projeto e retorna a saida.
+def run_maven(goals: str = "validate", modulo: str = "") -> str:
+    """Executa um comando Maven no projeto e retorna a saida.
 
     `goals` sao os argumentos do mvn (ex.: "validate", "compile",
     "dependency:tree"). Use para VERIFICAR que as mudancas nao quebraram
     o build. Prefira comandos rapidos como "validate" ou "compile".
+
+    `modulo` e a pasta do pom.xml, relativa a raiz (ex.: "app"). Deixe vazio
+    para o agente localizar sozinho -- so preencha se houver mais de um modulo
+    e voce souber qual quer.
     """
-    root = get_project_root()
+    if modulo:
+        try:
+            pasta = resolve_inside_project(modulo)
+        except (PermissionError, RuntimeError) as exc:
+            return f"ERRO: {exc}"
+        if not (pasta / "pom.xml").is_file():
+            return f"ERRO: nao ha pom.xml em: {modulo}\n{_onde_procurar(pasta)}".rstrip()
+    else:
+        candidatas = _pastas_com_pom()
+        if not candidatas:
+            return (
+                "ERRO: nenhum pom.xml encontrado na raiz nem nas pastas de "
+                f"primeiro nivel.\n{_onde_procurar(get_project_root())}"
+            )
+        if len(candidatas) > 1:
+            nomes = ", ".join(_rotulo(p) for p in candidatas)
+            return (
+                f"ERRO: ha mais de um modulo Maven aqui ({nomes}). "
+                "Repita a chamada passando `modulo` com o que voce quer."
+            )
+        pasta = candidatas[0]
+
     # No Windows o executavel costuma ser mvn.cmd; deixamos o shell resolver.
     comando = f"mvn -B {goals}"
 
     detalhe = Text.assemble(
-        ("$ ", "dim"), (comando, "bold"), ("\n", ""), (f"  em {root}", "dim")
+        ("$ ", "dim"), (comando, "bold"), ("\n", ""), (f"  em {pasta}", "dim")
     )
     if not _confirmar("executar Maven", detalhe):
         return f"CANCELADO: usuario nao aprovou 'mvn {goals}'"
@@ -219,7 +322,7 @@ def run_maven(goals: str = "validate") -> str:
     try:
         resultado = subprocess.run(
             comando,
-            cwd=root,
+            cwd=pasta,
             shell=True,
             capture_output=True,
             text=True,
@@ -234,7 +337,9 @@ def run_maven(goals: str = "validate") -> str:
     if len(saida) > MAX_READ_CHARS:
         saida = saida[-MAX_READ_CHARS:]  # o fim do log costuma ter o erro
     status = "SUCESSO" if resultado.returncode == 0 else f"FALHA (exit {resultado.returncode})"
-    return f"[{status}]\n{saida}"
+    # Onde rodou entra na resposta: em repositorio com o pom fora da raiz, o
+    # modelo precisa saber qual modulo foi construido para ler o log direito.
+    return f"[{status}] mvn {goals} em '{_rotulo(pasta)}'\n{saida}"
 
 
 @tool

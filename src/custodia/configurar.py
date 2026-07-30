@@ -30,6 +30,7 @@ from pathlib import Path
 
 from dotenv import find_dotenv
 
+from . import config
 from .aws import PERFIS, REGIAO_PADRAO
 from .config import OPENAI_SENTINEL
 from .llm import PROVEDORES
@@ -132,17 +133,25 @@ class Chave:
     valor: str
     comentada: bool = False
     nota: str = ""
+    # A linha ja existe no arquivo com outro valor -- reescrever ou respeitar?
+    # A regra geral e RESPEITAR: o .env e do desenvolvedor, e o /config so
+    # completa o que falta. A excecao e a escolha que ele acabou de fazer no
+    # wizard (o provedor e o modelo dele): ali, deixar o valor antigo seria
+    # ignorar a resposta e devolver um arquivo que contradiz o que foi pedido.
+    substituir: bool = False
 
 
 @dataclass
 class PlanoDoEnv:
     caminho: Path
     faltando: list[Chave] = field(default_factory=list)
+    # (chave nova, valor que estava la) -- linhas que vao ser reescritas.
+    substituindo: list[tuple[Chave, str]] = field(default_factory=list)
     ja_configuradas: list[str] = field(default_factory=list)
 
     @property
     def tem_o_que_fazer(self) -> bool:
-        return bool(self.faltando)
+        return bool(self.faltando or self.substituindo)
 
 
 def caminho_do_env() -> Path:
@@ -159,9 +168,25 @@ def caminho_do_env() -> Path:
 
 def _chaves_necessarias(provedor_nome: str) -> list[Chave]:
     provedor = PROVEDORES[provedor_nome]
+    # Trocar de provedor obriga a reescrever as duas primeiras linhas: sem
+    # isso, escolher outra LLM no wizard nao mudaria nada -- o arquivo ja tem
+    # um AGENT_PROVIDER, e a regra normal e nao mexer no que ja existe. Se a
+    # escolha foi o provedor que ja estava valendo, nada e reescrito e um
+    # AGENT_MODEL customizado sobrevive.
+    trocou_de_provedor = (config.AGENT_PROVIDER or "").strip().lower() != provedor.nome
     chaves = [
-        Chave("AGENT_PROVIDER", provedor.nome, nota="quem responde"),
-        Chave("AGENT_MODEL", provedor.modelo_padrao, nota="vazio = padrao do provedor"),
+        Chave(
+            "AGENT_PROVIDER",
+            provedor.nome,
+            nota="quem responde",
+            substituir=trocou_de_provedor,
+        ),
+        Chave(
+            "AGENT_MODEL",
+            provedor.modelo_padrao,
+            nota="vazio = padrao do provedor",
+            substituir=trocou_de_provedor,
+        ),
         # Entra SEMPRE, em qualquer provedor -- a exigencia vem da biblioteca
         # cliente, nao do modelo. Ver OPENAI_SENTINEL no config.py.
         Chave(
@@ -184,10 +209,11 @@ def _chaves_necessarias(provedor_nome: str) -> list[Chave]:
                 nota=f"credencial do {provedor.rotulo} -- descomente e cole a sua",
             )
         )
-    # Os ajustes proprios do provedor (versao de API, ambiente do gateway...),
-    # ja com o valor que o agente usa hoje.
-    for variavel, valor, nota in provedor.variaveis_opcionais:
-        chaves.append(Chave(variavel, valor, nota=nota))
+    # Os ajustes proprios do provedor (ambiente do gateway, por exemplo), ja
+    # com o valor que o agente usa AGORA -- lido do config na hora, para o
+    # arquivo escrito nao discordar do que o /status mostra em seguida.
+    for variavel, nota in provedor.variaveis_opcionais:
+        chaves.append(Chave(variavel, str(getattr(config, variavel, "")), nota=nota))
     chaves.append(
         Chave("KB_ID", PLACEHOLDER, comentada=True, nota="id da KB na solucao interna de embedding")
     )
@@ -197,19 +223,20 @@ def _chaves_necessarias(provedor_nome: str) -> list[Chave]:
     return chaves
 
 
-def _chaves_ja_definidas(texto: str) -> set[str]:
-    """Nomes ja presentes no arquivo, comentados ou nao.
+def _chaves_ja_definidas(texto: str) -> dict[str, str]:
+    """Nome -> valor de tudo que ja esta no arquivo, comentado ou nao.
 
     Conta a linha comentada de proposito: se o /config ja escreveu
     `# OPENAI_API_KEY=PREENCHA` antes, escrever de novo criaria uma segunda
     linha igual a cada execucao.
     """
-    nomes = set()
+    encontradas: dict[str, str] = {}
     for linha in texto.splitlines():
         limpa = linha.strip().lstrip("#").strip()
         if "=" in limpa:
-            nomes.add(limpa.split("=", 1)[0].strip())
-    return nomes
+            nome, valor = limpa.split("=", 1)
+            encontradas[nome.strip()] = valor.strip()
+    return encontradas
 
 
 def planejar_env(provedor_nome: str) -> PlanoDoEnv:
@@ -221,10 +248,14 @@ def planejar_env(provedor_nome: str) -> PlanoDoEnv:
     for chave in _chaves_necessarias(provedor_nome):
         if chave.nome.startswith("#"):
             continue  # linha puramente informativa, nao e chave
-        if chave.nome in existentes:
-            plano.ja_configuradas.append(chave.nome)
-        else:
+        if chave.nome not in existentes:
             plano.faltando.append(chave)
+            continue
+        anterior = existentes[chave.nome]
+        if chave.substituir and anterior != chave.valor:
+            plano.substituindo.append((chave, anterior))
+        else:
+            plano.ja_configuradas.append(chave.nome)
     return plano
 
 
@@ -242,9 +273,39 @@ def _render_env(chaves: list[Chave]) -> str:
     return "\n".join(linhas)
 
 
+def _substituir_linhas(texto: str, trocas: dict[str, str]) -> str:
+    """Reescreve o valor das chaves pedidas, no lugar onde elas ja estao.
+
+    No LUGAR, e nao acrescentando no fim, porque duas linhas com a mesma
+    variavel nao dao erro nenhum: o dotenv fica com a ultima e o arquivo passa
+    a mentir para quem le. Linha comentada e ignorada -- se o valor esta
+    desativado, quem escolheu isso foi o desenvolvedor.
+    """
+    saida = []
+    for linha in texto.splitlines():
+        despida = linha.strip()
+        if despida and not despida.startswith("#") and "=" in despida:
+            nome = despida.split("=", 1)[0].strip()
+            if nome in trocas:
+                saida.append(f"{nome}={trocas[nome]}")
+                continue
+        saida.append(linha)
+    return "\n".join(saida) + ("\n" if texto.endswith("\n") else "")
+
+
 def aplicar_env(plano: PlanoDoEnv) -> None:
-    """Acrescenta as chaves que faltam no fim do arquivo."""
+    """Reescreve o que mudou de valor e acrescenta o que falta."""
     if not plano.tem_o_que_fazer:
+        return
+
+    if plano.substituindo and plano.caminho.is_file():
+        texto = plano.caminho.read_text(encoding="utf-8")
+        trocas = {chave.nome: chave.valor for chave, _ in plano.substituindo}
+        plano.caminho.write_text(
+            _substituir_linhas(texto, trocas), encoding="utf-8"
+        )
+
+    if not plano.faltando:
         return
     conteudo = _render_env(plano.faltando)
     if not plano.caminho.is_file():

@@ -41,8 +41,9 @@ from rich.table import Table
 from rich.text import Text
 
 from . import NOME, __version__
+from . import config
+from . import iara
 from .chat import ChatIndisponivel, Conversa, loop_de_conversa
-from .config import KB_ID
 from .configurar import (
     PLACEHOLDER,
     Q_AMBIENTES,
@@ -84,6 +85,20 @@ NOME_AGENTE = f"{NOME} {VERSAO}"
 # Uma conversa por sessao. O /chat e o texto solto digitado no prompt principal
 # falam com ESTA instancia -- ou seja, compartilham o mesmo historico.
 _CONVERSA = Conversa()
+
+
+def recarregar_configuracao() -> None:
+    """Faz o processo inteiro enxergar o .env que o /config acabou de escrever.
+
+    Sao tres camadas guardando decisoes tomadas na leitura anterior, e todas
+    precisam largar o osso -- se uma ficar para tras, o agente passa a mentir
+    sobre si mesmo: o /status diz um provedor e a conversa fala com outro.
+    """
+    config.recarregar()
+    # O cliente do gateway ja esta autenticado no ambiente antigo.
+    iara.esquecer_cliente()
+    # E o grafo ja tem o modelo antigo amarrado nas ferramentas.
+    _CONVERSA.esquecer_modelo()
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +191,7 @@ def cmd_config(root: Path) -> bool:
 
     pendencias = (
         len(plano_env.faltando)
+        + len(plano_env.substituindo)
         + len(plano_aws.faltando)
         + (1 if plano_amb.tem_o_que_fazer else 0)
     )
@@ -208,7 +224,14 @@ def cmd_config(root: Path) -> bool:
             f"{escape((exc.stderr or str(exc)).strip())}\n"
         )
 
+    # O .env mudou -- releia AGORA. Sem isto o processo seguiria com o que foi
+    # lido quando a CLI subiu: o /status anunciaria o provedor antigo e a
+    # conversa continuaria falando com ele. Fica fora do try de proposito: o
+    # arquivo ja esta escrito mesmo que o setx tenha falhado.
+    recarregar_configuracao()
+
     _relatar_config(plano_env, plano_aws, plano_amb)
+    console.print(f"[dim]LLM ativa agora:[/dim] {descrever_llm()}\n")
     _nota_de_fluxo_deterministico()
     return True
 
@@ -234,6 +257,13 @@ def _mostrar_plano(plano_env: Any, plano_aws: Any, plano_amb: Any) -> None:
     console.print(f"[bold]{escape(str(plano_env.caminho))}[/bold]")
     for nome in plano_env.ja_configuradas:
         console.print(f"  [dim]= {nome}  (ja existe, nao vou tocar)[/dim]")
+    # A troca aparece com o valor VELHO junto: e a unica linha do plano que
+    # apaga algo, entao quem confirma precisa ver o que vai perder.
+    for chave, anterior in plano_env.substituindo:
+        console.print(
+            f"  [yellow]~[/yellow] {chave.nome}={chave.valor}  "
+            f"[dim](era {anterior})[/dim]"
+        )
     for chave in plano_env.faltando:
         prefixo = "# " if chave.comentada else ""
         console.print(f"  [green]+[/green] {prefixo}{chave.nome}={chave.valor}")
@@ -406,7 +436,11 @@ def cmd_status(root: Path) -> bool:
     print(f"\nLLM                    : {descrever_llm()}")
     print(
         "Base de conhecimento   : "
-        + (f"KB {KB_ID}" if esta_configurada() else "nao configurada (KB_ID vazio)")
+        + (
+            f"KB {config.KB_ID}"
+            if esta_configurada()
+            else "nao configurada (KB_ID vazio)"
+        )
     )
     # O contador da sessao inteira. Enquanto so rodarem wizards ele fica em
     # zero -- e essa e a leitura util: o custo aparece so quando alguem

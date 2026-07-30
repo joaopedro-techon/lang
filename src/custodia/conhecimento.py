@@ -29,7 +29,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .config import KB_ID, KB_TOP_K, KB_VERSION_ID
+# O modulo, nao os valores: o /config reescreve o .env em runtime e manda o
+# config recarregar -- um KB_ID importado ficaria congelado no import.
+from . import config
 from .iara import IaraIndisponivel
 from .iara import cliente as cliente_iara
 
@@ -53,7 +55,7 @@ class Trecho:
 
 def esta_configurada() -> bool:
     """Da para consultar? Sem KB_ID a ferramenta se declara indisponivel."""
-    return bool(KB_ID)
+    return bool(config.KB_ID)
 
 
 # ---------------------------------------------------------------------------
@@ -94,8 +96,8 @@ def _buscar(cliente: Any, texto_consulta: str, top_k: int) -> Any:
     )
 
     referencia = SimilaritySearchKnowledgeBaseVersionReference(
-        knowledge_base_id=KB_ID,
-        knowledge_base_version_id=KB_VERSION_ID if KB_VERSION_ID else None,
+        knowledge_base_id=config.KB_ID,
+        knowledge_base_version_id=config.KB_VERSION_ID or None,
     )
 
     return cliente.datafoundation.similarity_search(
@@ -115,7 +117,7 @@ def consultar(texto_consulta: str, limite: int | None = None) -> list[Trecho]:
     if not esta_configurada():
         raise KBIndisponivel("KB_ID nao configurado no .env -- base nao consultada.")
 
-    top_k = limite if limite and limite > 0 else KB_TOP_K
+    top_k = limite if limite and limite > 0 else config.KB_TOP_K
     cliente = _cliente()
 
     try:

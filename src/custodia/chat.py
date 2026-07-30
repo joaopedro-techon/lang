@@ -81,6 +81,16 @@ class Conversa:
         """Esquece o historico. O grafo (e a conexao) continuam de pe."""
         self._mensagens = []
 
+    def esquecer_modelo(self) -> None:
+        """Joga fora o grafo -- o proximo turno reconstroi com o .env atual.
+
+        O grafo nasce com o modelo ja amarrado as ferramentas (`bind_tools`),
+        entao trocar de provedor no /config nao alcanca um grafo que ja existe.
+        O HISTORICO fica: quem trocou de modelo no meio da conversa quer
+        continuar de onde parou, so que com o outro respondendo.
+        """
+        self._grafo = None
+
     @property
     def vazia(self) -> bool:
         return not self._mensagens

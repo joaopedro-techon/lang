@@ -2,19 +2,20 @@
 
 Sao DOIS provedores, um para cada lugar onde o agente roda:
 
+    AGENT_PROVIDER=iara         na empresa -- o gateway interno IaraGenAI (PADRAO)
     AGENT_PROVIDER=anthropic    fora da empresa -- Claude pela API da Anthropic
-    AGENT_PROVIDER=iara         na empresa -- o gateway interno IaraGenAI
 
 O grafo pede `build_llm()` e nao sabe (nem precisa saber) quem respondeu: os
 dois entregam um chat model do LangChain, com a mesma interface
 `.bind_tools()` / `.invoke()`, entao o loop ReAct continua igual.
 
-Trocar e mexer no .env:
+Trocar e mexer no .env (ou rodar o /config, que reescreve as duas primeiras
+linhas por voce e recarrega tudo na mesma sessao):
 
-    AGENT_PROVIDER=anthropic          AGENT_PROVIDER=iara
-    AGENT_MODEL=claude-opus-5         AGENT_MODEL=gpt-4.1-mini
-    ANTHROPIC_API_KEY=...             IARA_CLIENT_ID=...
-                                      IARA_CLIENT_SECRET=...
+    AGENT_PROVIDER=iara               AGENT_PROVIDER=anthropic
+    AGENT_MODEL=gpt-4.1-mini          AGENT_MODEL=claude-opus-5
+    IARA_CLIENT_ID=...                ANTHROPIC_API_KEY=...
+    IARA_CLIENT_SECRET=...
 
 Os dois pacotes necessarios (`langchain-anthropic` e `langchain-openai`) vem no
 install do custodia-cli. O `iaragenai`, que so o gateway usa, vem do Artifactory
@@ -30,17 +31,12 @@ from dataclasses import dataclass, field
 from importlib import import_module
 from typing import Any
 
-from .config import (
-    AGENT_BASE_URL,
-    AGENT_MAX_RETRIES,
-    AGENT_MAX_TOKENS,
-    AGENT_MODEL,
-    AGENT_PROMPT_CACHE,
-    AGENT_PROVIDER,
-    IARA_ENVIRONMENT,
-    IARA_PROVIDER,
-    OPENAI_SENTINEL,
-)
+# O modulo inteiro, e nao `from .config import AGENT_PROVIDER`: o /config
+# reescreve o .env em runtime e manda o config recarregar. Um valor importado
+# seria uma copia congelada no import -- o /status anunciaria o provedor
+# antigo depois da troca.
+from . import config
+from .config import OPENAI_SENTINEL  # constante literal, essa nao muda
 from .iara import IaraIndisponivel
 from .iara import cliente as cliente_iara
 
@@ -123,10 +119,11 @@ class Provedor:
     # Credenciais obrigatorias, checadas antes de montar o grafo.
     variaveis_de_chave: tuple[str, ...] = ()
     # Variaveis que nao sao credencial mas ajustam ESTE provedor -- (nome,
-    # valor, nota). O /config as escreve no .env ja com o valor em uso, para
-    # que dar de cara com elas no arquivo seja mais facil que descobrir no
-    # README que elas existem.
-    variaveis_opcionais: tuple[tuple[str, str, str], ...] = ()
+    # nota). O /config as escreve no .env ja com o valor em uso, para que dar
+    # de cara com elas no arquivo seja mais facil que descobrir no README que
+    # elas existem. O valor sai do `config` na hora de escrever (o nome aqui e
+    # o mesmo do atributo la), nunca de uma copia guardada neste catalogo.
+    variaveis_opcionais: tuple[tuple[str, str], ...] = ()
     # Como esse SDK chama o endpoint alternativo (AGENT_BASE_URL). None = nao
     # aceita -- no gateway quem decide o endpoint e o proprio gateway.
     param_base_url: str | None = None
@@ -140,20 +137,11 @@ class Provedor:
     cache_explicito: bool = False
 
 
-# O catalogo. Sao dois de proposito: a maquina do desenvolvedor (Claude) e a
-# rede da empresa (gateway interno). Nada mais no projeto precisa saber disso.
+# O catalogo. Sao dois de proposito: a rede da empresa (gateway interno) e a
+# maquina do desenvolvedor (Claude direto). Nada mais no projeto precisa saber
+# disso -- a ORDEM aqui e a ordem que o /config oferece, entao o padrao vem
+# primeiro.
 PROVEDORES: dict[str, Provedor] = {
-    "anthropic": Provedor(
-        nome="anthropic",
-        rotulo="Anthropic (Claude)",
-        modulo="langchain_anthropic",
-        classe="ChatAnthropic",
-        modelo_padrao="claude-opus-5",
-        pacote="langchain-anthropic",
-        variaveis_de_chave=("ANTHROPIC_API_KEY",),
-        param_base_url="base_url",
-        cache_explicito=True,
-    ),
     "iara": Provedor(
         nome="iara",
         rotulo="IaraGenAI (gateway interno)",
@@ -167,22 +155,36 @@ PROVEDORES: dict[str, Provedor] = {
         # Endpoint e versao de API nao entram aqui: o gateway resolve os dois
         # a partir do IARA_ENVIRONMENT e do IARA_PROVIDER.
         variaveis_opcionais=(
-            ("IARA_ENVIRONMENT", IARA_ENVIRONMENT, "dev | homol | prod"),
+            ("IARA_ENVIRONMENT", "dev | homol | prod"),
             (
                 "IARA_PROVIDER",
-                IARA_PROVIDER,
                 "quem serve o modelo por tras do gateway: "
                 "azure_openai | bedrock | vertex",
             ),
         ),
         preparar=_ligar_gateway_iara,
     ),
+    "anthropic": Provedor(
+        nome="anthropic",
+        rotulo="Anthropic (Claude)",
+        modulo="langchain_anthropic",
+        classe="ChatAnthropic",
+        modelo_padrao="claude-opus-5",
+        pacote="langchain-anthropic",
+        variaveis_de_chave=("ANTHROPIC_API_KEY",),
+        param_base_url="base_url",
+        cache_explicito=True,
+    ),
 }
+
+# Quem responde quando o .env nao diz nada. O gateway interno e o caminho
+# normal na empresa, que e onde o agente roda de verdade.
+PROVEDOR_PADRAO = "iara"
 
 
 def provedor_atual() -> Provedor:
     """Traduz o AGENT_PROVIDER do .env numa entrada do catalogo."""
-    nome = (AGENT_PROVIDER or "anthropic").strip().lower()
+    nome = (config.AGENT_PROVIDER or PROVEDOR_PADRAO).strip().lower()
     provedor = PROVEDORES.get(nome)
     if provedor is None:
         raise LLMIndisponivel(
@@ -194,7 +196,7 @@ def provedor_atual() -> Provedor:
 
 def modelo_atual() -> str:
     """O modelo escolhido, ou o padrao do provedor se o .env nao disser."""
-    return AGENT_MODEL.strip() or provedor_atual().modelo_padrao
+    return config.AGENT_MODEL.strip() or provedor_atual().modelo_padrao
 
 
 def descrever_llm() -> str:
@@ -204,12 +206,12 @@ def descrever_llm() -> str:
     except LLMIndisponivel as exc:
         return f"configuracao invalida -- {exc}"
     texto = f"{provedor.rotulo} / {modelo_atual()}"
-    if AGENT_BASE_URL and provedor.param_base_url:
-        texto += f"  (via {AGENT_BASE_URL})"
+    if config.AGENT_BASE_URL and provedor.param_base_url:
+        texto += f"  (via {config.AGENT_BASE_URL})"
     # Para qual ambiente o gateway aponta muda a resposta -- e a primeira
     # coisa que se quer saber quando o /status e chamado para conferir.
     if provedor.nome == "iara":
-        texto += f"  ({IARA_ENVIRONMENT} / {IARA_PROVIDER})"
+        texto += f"  ({config.IARA_ENVIRONMENT} / {config.IARA_PROVIDER})"
     return texto
 
 
@@ -264,11 +266,11 @@ def build_llm() -> Any:
 
     kwargs: dict[str, Any] = {
         "model": modelo_atual(),
-        "max_tokens": AGENT_MAX_TOKENS,
-        "max_retries": AGENT_MAX_RETRIES,
+        "max_tokens": config.AGENT_MAX_TOKENS,
+        "max_retries": config.AGENT_MAX_RETRIES,
     }
-    if AGENT_BASE_URL and provedor.param_base_url:
-        kwargs[provedor.param_base_url] = AGENT_BASE_URL
+    if config.AGENT_BASE_URL and provedor.param_base_url:
+        kwargs[provedor.param_base_url] = config.AGENT_BASE_URL
 
     # `temperature` fica de fora de proposito: os modelos mais recentes da
     # Anthropic REJEITAM o parametro com HTTP 400. Como este arquivo serve os
@@ -285,7 +287,7 @@ def build_llm() -> Any:
 
 def cache_ligado() -> bool:
     """O cache de prompt vai ser pedido nesta configuracao?"""
-    return AGENT_PROMPT_CACHE and provedor_atual().cache_explicito
+    return config.AGENT_PROMPT_CACHE and provedor_atual().cache_explicito
 
 
 def build_llm_com_tools(ferramentas: list[Any]) -> Any:

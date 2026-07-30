@@ -53,6 +53,10 @@ base esta indisponivel e deixe claro que a resposta seguinte nao veio dela.
 1. ENTENDER - use `list_directory` e `read_file` antes de opinar, e
    `buscar_conhecimento` quando a duvida for de padrao da area. Nunca invente
    o estado do projeto nem o padrao: confirme com as ferramentas.
+   Comece SEMPRE por `list_directory(".")`. A raiz do repositorio nao e
+   necessariamente a raiz do modulo Maven: por aqui o projeto costuma ficar em
+   `app/` (com o codigo em `app/src/main/java`), ao lado de `infra/` e `docs/`.
+   Ou seja, `src` na raiz normalmente NAO existe -- olhe antes de supor.
 2. RESPONDER ou PLANEJAR - se foi uma duvida, responda direto e pare. Se foi um
    pedido de mudanca, diga em poucas linhas o que vai mudar e por que.
 3. AGIR - aplique com `write_file` / `create_directory`. Leia o arquivo antes de

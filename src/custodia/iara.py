@@ -17,12 +17,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from .config import (
-    IARA_CLIENT_ID,
-    IARA_CLIENT_SECRET,
-    IARA_ENVIRONMENT,
-    IARA_PROVIDER,
-)
+# O modulo, nao os valores: o /config pode reescrever o .env em runtime, e um
+# `from .config import IARA_CLIENT_ID` congelaria a credencial do import.
+from . import config
 
 
 class IaraIndisponivel(RuntimeError):
@@ -56,12 +53,12 @@ def cliente() -> Any:
         ) from exc
 
     credenciais: dict[str, Any] = {}
-    if IARA_CLIENT_ID and IARA_CLIENT_SECRET:
+    if config.IARA_CLIENT_ID and config.IARA_CLIENT_SECRET:
         credenciais = {
-            "client_id": IARA_CLIENT_ID,
-            "client_secret": IARA_CLIENT_SECRET,
-            "environment": IARA_ENVIRONMENT,
-            "provider": IARA_PROVIDER,
+            "client_id": config.IARA_CLIENT_ID,
+            "client_secret": config.IARA_CLIENT_SECRET,
+            "environment": config.IARA_ENVIRONMENT,
+            "provider": config.IARA_PROVIDER,
         }
 
     try:
@@ -71,3 +68,14 @@ def cliente() -> Any:
             f"nao foi possivel autenticar no gateway interno: {exc}"
         ) from exc
     return _cache
+
+
+def esquecer_cliente() -> None:
+    """Joga fora o cliente do processo -- o proximo uso constroi outro.
+
+    Chamado quando o /config mexe no .env: credencial ou ambiente novos pedem
+    um cliente novo, senao a conversa continuaria autenticada no ambiente
+    anterior sem nenhum sinal disso na tela.
+    """
+    global _cache
+    _cache = None

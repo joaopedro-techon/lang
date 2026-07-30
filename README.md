@@ -105,34 +105,23 @@ São **dois** provedores, um para cada lugar onde o agente roda:
 
 | `AGENT_PROVIDER` | Onde | Credencial | Modelo padrão |
 |---|---|---|---|
-| `anthropic` *(padrão)* | sua máquina | `ANTHROPIC_API_KEY` | `claude-opus-5` |
-| `iara` | rede da empresa | `IARA_CLIENT_ID` + `IARA_CLIENT_SECRET` | `gpt-4.1-mini` |
+| `iara` *(padrão)* | rede da empresa | `IARA_CLIENT_ID` + `IARA_CLIENT_SECRET` | `gpt-4.1-mini` |
+| `anthropic` | sua máquina | `ANTHROPIC_API_KEY` | `claude-opus-5` |
 
-Os dois vêm no install; trocar é só mexer no `.env`, e o `/status` mostra qual está
-valendo. O grafo do agente não muda — os dois entregam um chat model do LangChain
-com a mesma interface.
+Os dois vêm no install. Para trocar, use o **`/config`** (ele reescreve o `.env` e a
+troca vale na mesma sessão, sem reabrir a CLI) ou edite o `AGENT_PROVIDER` na mão —
+nesse caso, reabra. O `/status` mostra qual está valendo. O grafo do agente não muda:
+os dois entregam um chat model do LangChain com a mesma interface.
 
 Os comandos determinísticos (`/initialize`, `/status`, `/infra`) **não** usam LLM e
 continuam funcionando sem credencial nenhuma — o agente só é ligado no primeiro turno
 de conversa.
 
-### Claude (na sua máquina)
+### Gateway interno (IaraGenAI) — o padrão
 
-Copie `.env.example` para `.env` na pasta do seu repositório e preencha:
-
-```
-AGENT_PROVIDER=anthropic
-ANTHROPIC_API_KEY=sk-ant-...
-AGENT_MODEL=claude-opus-5   # opcional
-```
-
-A chave sai de https://console.anthropic.com/settings/keys.
-
-### Gateway interno (IaraGenAI)
-
-Dentro da empresa é o caminho normal: o gateway autentica por `client_id`/`client_secret`
-e fala com Azure OpenAI, Bedrock ou Vertex do outro lado — sem chave de modelo e sem
-endpoint no `.env`.
+Dentro da empresa é o caminho normal, e é o que vale quando o `.env` não diz nada: o
+gateway autentica por `client_id`/`client_secret` e fala com Azure OpenAI, Bedrock ou
+Vertex do outro lado — sem chave de modelo e sem endpoint no `.env`.
 
 ```
 AGENT_PROVIDER=iara
@@ -167,6 +156,19 @@ Se preferir as credenciais como **variáveis de ambiente da sua conta**, em vez 
 
 > Abra um terminal novo depois: variável de ambiente só entra em processo que nasce
 > depois dela.
+
+### Claude (na sua máquina)
+
+Fora da rede da empresa, copie `.env.example` para `.env` na pasta do seu repositório
+e preencha:
+
+```
+AGENT_PROVIDER=anthropic
+ANTHROPIC_API_KEY=sk-ant-...
+AGENT_MODEL=claude-opus-5   # opcional
+```
+
+A chave sai de https://console.anthropic.com/settings/keys.
 
 ## Uso
 
