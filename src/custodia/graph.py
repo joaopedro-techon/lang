@@ -16,7 +16,7 @@ orquestracao em vez de usar uma caixa-preta:
 
 Nada aqui sabe QUAL modelo esta respondendo: `build_llm()` (em `llm.py`) le o
 provedor do .env e devolve um chat model do LangChain, e o loop abaixo funciona
-igual com Claude, GPT, Gemini ou um modelo local.
+igual com o Claude direto ou com o modelo servido pelo gateway interno.
 """
 
 from __future__ import annotations

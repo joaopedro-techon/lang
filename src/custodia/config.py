@@ -28,23 +28,25 @@ load_dotenv()
 # Sentinela da OPENAI_API_KEY.
 #
 # Clientes compativeis com a API da OpenAI costumam EXIGIR que a variavel
-# exista -- eles recusam inicializar sem ela -- mesmo quando o endpoint do
-# outro lado nao autentica nada. Como a exigencia vem da BIBLIOTECA e nao do
-# modelo escolhido, ela vale para qualquer AGENT_PROVIDER: um projeto rodando
-# em Claude pode importar uma lib que estoura no import por falta dessa chave.
+# exista -- eles recusam inicializar sem ela -- mesmo quando quem autentica e
+# outra coisa. E o caso do gateway interno: ele usa o `ChatOpenAI` como fachada
+# (ver `llm.py`), e sem essa variavel o cliente nem nasce. Como a exigencia vem
+# da BIBLIOTECA e nao do modelo, preenchemos para qualquer AGENT_PROVIDER: um
+# projeto rodando em Claude pode importar uma lib que estoura no import por
+# falta dessa chave.
 #
-# Se ja houver chave de verdade no ambiente ou no .env, ela ganha: a sentinela
-# so preenche o vazio, nunca sobrescreve credencial.
+# Se ja houver chave de verdade no ambiente ou no .env, ela ganha aqui: a
+# sentinela so preenche o vazio. (No provedor `iara` o llm.py sobrescreve de
+# proposito -- la uma chave real nao serviria para nada.)
 #
-# Repare que a checagem NAO e um `setdefault`. Na maquina corporativa a
-# credencial costuma vir de variavel de ambiente da CONTA do usuario, e quem
-# configura a AZURE_OPENAI_API_KEY por la quase nunca configura a OPENAI_API_KEY
-# junto -- pior, e comum sobrar uma OPENAI_API_KEY VAZIA de alguma tentativa
-# anterior. String vazia existe para o `setdefault` (ele nao preencheria) mas
-# nao serve para a biblioteca. Por isso tratamos vazio como ausente.
+# Repare que a checagem NAO e um `setdefault`. Na maquina corporativa e comum
+# sobrar uma OPENAI_API_KEY VAZIA de alguma tentativa anterior: string vazia
+# existe para o `setdefault` (que entao nao preencheria) mas nao serve para a
+# biblioteca. Por isso tratamos vazio como ausente.
 OPENAI_SENTINEL = "sk-no-key-required"
 if not (os.getenv("OPENAI_API_KEY") or "").strip():
     os.environ["OPENAI_API_KEY"] = OPENAI_SENTINEL
+
 
 def _inteiro(nome: str, padrao: int) -> int:
     """Le um inteiro do ambiente sem derrubar a CLI se vier lixo no .env.
@@ -74,7 +76,7 @@ def _booleano(nome: str, padrao: bool) -> bool:
 # ---------------------------------------------------------------------------
 # O catalogo de provedores esta em `llm.py`; aqui so lemos a escolha do .env.
 
-# Quem responde: anthropic, openai, azure, google, bedrock, ollama.
+# Quem responde: anthropic (Claude, fora da empresa) ou iara (gateway interno).
 AGENT_PROVIDER: str = os.getenv("AGENT_PROVIDER", "anthropic")
 
 # Modelo. Vazio = usa o padrao do provedor escolhido (ver `llm.PROVEDORES`).
@@ -97,24 +99,6 @@ AGENT_BASE_URL: str = os.getenv("AGENT_BASE_URL", "")
 # cachear o prefixo e o que mais corta custo aqui. Desligue so para comparar
 # o gasto com e sem (o /chat mostra os tokens de cache no fim de cada turno).
 AGENT_PROMPT_CACHE: bool = _booleano("AGENT_PROMPT_CACHE", True)
-
-# Versao da API do Azure OpenAI (AGENT_PROVIDER=azure).
-#
-# O `AzureChatOpenAI` RECUSA nascer sem isso -- o erro e um ValidationError
-# pedindo "either the `api_version` argument or the `OPENAI_API_VERSION`
-# environment variable". Diferente dos outros provedores, no Azure a versao da
-# API e do endpoint, nao do modelo, entao nao da para inferir do AGENT_MODEL.
-# Um padrao GA aqui deixa o caso comum funcionar sem mais uma variavel no .env;
-# quem precisa de um recurso mais novo (ou de um endpoint preso a outra versao)
-# sobrescreve.
-AZURE_OPENAI_API_VERSION: str = (
-    os.getenv("AZURE_OPENAI_API_VERSION")
-    or os.getenv("OPENAI_API_VERSION")
-    or "2024-10-21"
-)
-# Espelhado no ambiente pelo mesmo motivo da sentinela acima: bibliotecas que
-# falam Azure OpenAI leem essa variavel direto, sem passar por este modulo.
-os.environ.setdefault("OPENAI_API_VERSION", AZURE_OPENAI_API_VERSION)
 
 
 # ---------------------------------------------------------------------------

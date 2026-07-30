@@ -1,33 +1,25 @@
 """De qual LLM o agente fala -- e como trocar de provedor sem tocar no grafo.
 
-O agente nasceu preso ao Claude: o `graph.py` instanciava `ChatAnthropic`
-direto. Isso incomoda em ambiente corporativo, onde o modelo disponivel muda
-por politica, por custo ou porque a empresa expoe um gateway proprio.
+Sao DOIS provedores, um para cada lugar onde o agente roda:
 
-Aqui centralizamos essa escolha. O grafo pede `build_llm()` e nao sabe (nem
-precisa saber) quem respondeu: todo chat model do LangChain expoe a mesma
-interface `.bind_tools()` / `.invoke()`, entao o loop ReAct continua igual.
+    AGENT_PROVIDER=anthropic    fora da empresa -- Claude pela API da Anthropic
+    AGENT_PROVIDER=iara         na empresa -- o gateway interno IaraGenAI
 
-Trocar de provedor e mexer no .env:
+O grafo pede `build_llm()` e nao sabe (nem precisa saber) quem respondeu: os
+dois entregam um chat model do LangChain, com a mesma interface
+`.bind_tools()` / `.invoke()`, entao o loop ReAct continua igual.
 
-    AGENT_PROVIDER=openai
-    AGENT_MODEL=gpt-4o
-    OPENAI_API_KEY=...
+Trocar e mexer no .env:
 
-Dentro da empresa o caminho normal e o gateway interno, que nao pede chave de
-modelo nenhuma:
+    AGENT_PROVIDER=anthropic          AGENT_PROVIDER=iara
+    AGENT_MODEL=claude-opus-5         AGENT_MODEL=gpt-4.1-mini
+    ANTHROPIC_API_KEY=...             IARA_CLIENT_ID=...
+                                      IARA_CLIENT_SECRET=...
 
-    AGENT_PROVIDER=iara
-    AGENT_MODEL=gpt-4.1-mini
-    IARA_CLIENT_ID=...
-    IARA_CLIENT_SECRET=...
-
-O import de cada provedor e feito sob demanda, aqui dentro do `build_llm`.
-`langchain-anthropic` e `langchain-openai` (que serve openai, azure e iara) vem
-no pacote base, entao trocar entre esses quatro nao pede install nenhum. Google,
-Bedrock e Ollama continuam extras opcionais -- e quando falta um, a mensagem de
-erro diz exatamente qual `pip install` resolve, em vez de um ImportError cru no
-meio da conversa.
+Os dois pacotes necessarios (`langchain-anthropic` e `langchain-openai`) vem no
+install do custodia-cli. O `iaragenai`, que so o gateway usa, vem do Artifactory
+interno -- fora da rede da empresa ele nao instala, e o provedor `iara` avisa
+isso com todas as letras em vez de estourar um ImportError no meio da conversa.
 """
 
 from __future__ import annotations
@@ -45,7 +37,6 @@ from .config import (
     AGENT_MODEL,
     AGENT_PROMPT_CACHE,
     AGENT_PROVIDER,
-    AZURE_OPENAI_API_VERSION,
     IARA_ENVIRONMENT,
     IARA_PROVIDER,
     OPENAI_SENTINEL,
@@ -117,10 +108,9 @@ def _ligar_gateway_iara() -> None:
 class Provedor:
     """Como instanciar o chat model de um provedor.
 
-    Os campos `param_*` existem porque cada SDK batizou a mesma coisa de um
-    jeito: teto de tokens e `max_tokens` na Anthropic, `max_output_tokens` no
-    Gemini e `num_predict` no Ollama. Declarar o nome aqui evita um `if` por
-    provedor la embaixo no `build_llm`.
+    O que os dois tem em comum fica fora daqui: `model`, `max_tokens` e
+    `max_retries` se chamam igual no `ChatAnthropic` e no `ChatOpenAI`, entao
+    o `build_llm` passa os tres direto. Sao campos so para o que DIVERGE.
     """
 
     nome: str
@@ -130,37 +120,28 @@ class Provedor:
     modelo_padrao: str
     # O que instalar quando o modulo nao existe.
     pacote: str
-    # Credenciais obrigatorias. Vazio = o SDK resolve sozinho (profile da AWS,
-    # servidor local...).
+    # Credenciais obrigatorias, checadas antes de montar o grafo.
     variaveis_de_chave: tuple[str, ...] = ()
     # Variaveis que nao sao credencial mas ajustam ESTE provedor -- (nome,
     # valor, nota). O /config as escreve no .env ja com o valor em uso, para
     # que dar de cara com elas no arquivo seja mais facil que descobrir no
     # README que elas existem.
     variaveis_opcionais: tuple[tuple[str, str, str], ...] = ()
-    param_modelo: str = "model"
-    param_max_tokens: str | None = "max_tokens"
-    # Retentativa automatica do SDK. None = este SDK nao expoe o parametro
-    # (o Bedrock configura isso no boto3, o Ollama e local) -- passar ali
-    # levantaria erro de campo desconhecido.
-    param_max_retries: str | None = "max_retries"
-    # Como esse SDK chama o endpoint alternativo. None = nao aceita.
+    # Como esse SDK chama o endpoint alternativo (AGENT_BASE_URL). None = nao
+    # aceita -- no gateway quem decide o endpoint e o proprio gateway.
     param_base_url: str | None = None
-    # Versao da API. So o Azure pede (la a versao e do endpoint, nao do
-    # modelo) -- e sem ela o cliente nem nasce.
-    param_api_version: str | None = None
     # Passo extra ANTES de instanciar a classe, para o provedor que nao se
     # resolve so com kwargs. Hoje: o gateway interno, que troca a fabrica de
     # cliente do SDK da OpenAI.
     preparar: Callable[[], None] | None = field(default=None, repr=False)
     # Este provedor precisa que a gente PECA o cache de prompt? Na Anthropic
-    # sim (o cache e opt-in). OpenAI e Google cacheiam prefixo sozinhos, sem
-    # parametro nenhum -- pedir la nao ajuda e ainda pode virar erro.
+    # sim (o cache e opt-in). Do outro lado do gateway o cache, quando existe,
+    # e do provedor de la -- pedir aqui nao ajuda e ainda pode virar erro.
     cache_explicito: bool = False
 
 
-# O catalogo. Acrescentar um provedor e acrescentar uma entrada aqui -- nada
-# mais no projeto precisa mudar.
+# O catalogo. Sao dois de proposito: a maquina do desenvolvedor (Claude) e a
+# rede da empresa (gateway interno). Nada mais no projeto precisa saber disso.
 PROVEDORES: dict[str, Provedor] = {
     "anthropic": Provedor(
         nome="anthropic",
@@ -172,72 +153,6 @@ PROVEDORES: dict[str, Provedor] = {
         variaveis_de_chave=("ANTHROPIC_API_KEY",),
         param_base_url="base_url",
         cache_explicito=True,
-    ),
-    "openai": Provedor(
-        nome="openai",
-        rotulo="OpenAI",
-        modulo="langchain_openai",
-        classe="ChatOpenAI",
-        modelo_padrao="gpt-4o",
-        pacote="langchain-openai",
-        variaveis_de_chave=("OPENAI_API_KEY",),
-        param_base_url="base_url",
-    ),
-    "azure": Provedor(
-        nome="azure",
-        rotulo="Azure OpenAI",
-        modulo="langchain_openai",
-        classe="AzureChatOpenAI",
-        modelo_padrao="gpt-4o",
-        pacote="langchain-openai",
-        variaveis_de_chave=("AZURE_OPENAI_API_KEY",),
-        # No Azure nao se endereca o modelo, e sim o DEPLOYMENT: o AGENT_MODEL
-        # aqui e o nome do deployment criado no portal.
-        param_modelo="azure_deployment",
-        param_base_url="azure_endpoint",
-        param_api_version="api_version",
-        variaveis_opcionais=(
-            (
-                "AZURE_OPENAI_API_VERSION",
-                AZURE_OPENAI_API_VERSION,
-                "versao da API do endpoint -- o cliente nao nasce sem ela",
-            ),
-        ),
-    ),
-    "google": Provedor(
-        nome="google",
-        rotulo="Google (Gemini)",
-        modulo="langchain_google_genai",
-        classe="ChatGoogleGenerativeAI",
-        modelo_padrao="gemini-2.5-pro",
-        pacote="langchain-google-genai",
-        variaveis_de_chave=("GOOGLE_API_KEY",),
-        param_max_tokens="max_output_tokens",
-    ),
-    "bedrock": Provedor(
-        nome="bedrock",
-        rotulo="AWS Bedrock",
-        modulo="langchain_aws",
-        classe="ChatBedrockConverse",
-        modelo_padrao="anthropic.claude-opus-5",
-        pacote="langchain-aws",
-        # Credencial vem do profile/role da AWS, como no resto do agente.
-        variaveis_de_chave=(),
-        # Modelo Claude servido pela AWS: o cache continua sendo opt-in.
-        cache_explicito=True,
-        param_max_retries=None,
-    ),
-    "ollama": Provedor(
-        nome="ollama",
-        rotulo="Ollama (local)",
-        modulo="langchain_ollama",
-        classe="ChatOllama",
-        modelo_padrao="qwen3:8b",
-        pacote="langchain-ollama",
-        variaveis_de_chave=(),
-        param_max_tokens="num_predict",
-        param_base_url="base_url",
-        param_max_retries=None,
     ),
     "iara": Provedor(
         nome="iara",
@@ -291,8 +206,6 @@ def descrever_llm() -> str:
     texto = f"{provedor.rotulo} / {modelo_atual()}"
     if AGENT_BASE_URL and provedor.param_base_url:
         texto += f"  (via {AGENT_BASE_URL})"
-    if provedor.param_api_version:
-        texto += f"  (api {AZURE_OPENAI_API_VERSION})"
     # Para qual ambiente o gateway aponta muda a resposta -- e a primeira
     # coisa que se quer saber quando o /status e chamado para conferir.
     if provedor.nome == "iara":
@@ -305,8 +218,7 @@ def verificar_credenciais() -> str | None:
 
     Checagem barata, feita ANTES de montar o grafo. Sem ela o desenvolvedor
     descobriria a chave faltando so quando o modelo fosse chamado, embrulhada
-    num erro de SDK. Provedores sem `variaveis_de_chave` (Bedrock, Ollama)
-    passam direto: quem valida a credencial deles e o proprio SDK.
+    num erro de SDK.
     """
     provedor = provedor_atual()
     faltando = [
@@ -350,20 +262,18 @@ def build_llm() -> Any:
     if provedor.preparar is not None:
         provedor.preparar()
 
-    kwargs: dict[str, Any] = {provedor.param_modelo: modelo_atual()}
-    if provedor.param_max_tokens:
-        kwargs[provedor.param_max_tokens] = AGENT_MAX_TOKENS
-    if provedor.param_max_retries:
-        kwargs[provedor.param_max_retries] = AGENT_MAX_RETRIES
+    kwargs: dict[str, Any] = {
+        "model": modelo_atual(),
+        "max_tokens": AGENT_MAX_TOKENS,
+        "max_retries": AGENT_MAX_RETRIES,
+    }
     if AGENT_BASE_URL and provedor.param_base_url:
         kwargs[provedor.param_base_url] = AGENT_BASE_URL
-    if provedor.param_api_version:
-        kwargs[provedor.param_api_version] = AZURE_OPENAI_API_VERSION
 
     # `temperature` fica de fora de proposito: os modelos mais recentes da
-    # Anthropic REJEITAM o parametro com HTTP 400. Como este arquivo serve
-    # todos os provedores, nao passar e o unico comportamento que funciona em
-    # todos -- e o estilo da resposta se controla pelo prompt, nao por aqui.
+    # Anthropic REJEITAM o parametro com HTTP 400. Como este arquivo serve os
+    # dois provedores, nao passar e o unico comportamento que funciona nos
+    # dois -- e o estilo da resposta se controla pelo prompt, nao por aqui.
     try:
         return classe(**kwargs)
     except Exception as exc:  # credencial invalida, parametro recusado, etc.
@@ -387,11 +297,8 @@ def build_llm_com_tools(ferramentas: list[Any]) -> Any:
     perfeito para cache: a partir da segunda volta o modelo rele o que ja
     conhece por uma fracao do preco e paga cheio so pelo trecho novo.
 
-    Pedimos com `cache_control={"type": "ephemeral"}`. O langchain-anthropic
-    resolve a diferenca de transporte sozinho: na API direta isso vira o
-    parametro top-level (que marca o ultimo bloco cacheavel, ou seja, todo o
-    prefixo), e no Bedrock ele expande para um breakpoint no bloco -- a unica
-    forma que aquele transporte aceita.
+    Pedimos com `cache_control={"type": "ephemeral"}`, e so no Claude direto --
+    o `cache_explicito` do catalogo diz quem aceita.
 
     A ORDEM abaixo importa e e facil errar: `bind_tools` PRIMEIRO, `bind`
     depois. Invertendo, o `bind_tools` seria resolvido no modelo original e

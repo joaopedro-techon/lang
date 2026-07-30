@@ -17,13 +17,12 @@ classifiers = ["Private :: Do Not Upload"]
 dependencies = [
     # interrupt()/Command com a API atual: langgraph >= 0.2.57
     "langgraph>=0.2.57",
-    # O agente fala com qualquer provedor (ver custodia/llm.py). Os dois
-    # provedores usados no dia a dia da squad entram aqui, para que um
-    # `pip install custodia-cli` ja saia pronto para trocar AGENT_PROVIDER
-    # entre anthropic, openai e azure sem instalar mais nada. Os provedores
-    # restantes continuam extras opcionais mais abaixo.
+    # Sao dois provedores (ver custodia/llm.py), e os dois entram aqui: um
+    # `pip install custodia-cli` ja sai pronto para trocar o AGENT_PROVIDER
+    # entre `anthropic` e `iara` sem instalar mais nada.
+    # AGENT_PROVIDER=anthropic -> ChatAnthropic
     "langchain-anthropic>=0.3.0",
-    # ChatOpenAI (AGENT_PROVIDER=openai) e AzureChatOpenAI (=azure).
+    # AGENT_PROVIDER=iara -> ChatOpenAI, com o cliente trocado pelo gateway
     "langchain-openai>=0.2",
     "langchain-core>=0.3.0",
     "python-dotenv>=1.0.0",
@@ -31,8 +30,9 @@ dependencies = [
     "rich>=13.0",
     # Selecao com setas no wizard (Choice aceita `description` a partir da 2.0).
     "questionary>=2.0",
-    # SDK interno da base de conhecimento (classe IaraGenAI, ver
-    # custodia/conhecimento.py). Vem do Artifactory da organizacao e NAO existe
+    # SDK interno: e a classe IaraGenAI, que serve tanto ao modelo (provedor
+    # `iara`) quanto a base de conhecimento -- ver custodia/iara.py.
+    # Vem do Artifactory da organizacao e NAO existe
     # no PyPI publico. Com o indice interno configurado (README > "Configurar o
     # indice interno") o install resolve liso; FORA da rede da empresa o pip
     # falha nesta linha -- ali use `pip install -e . --no-deps` e instale o
@@ -48,19 +48,16 @@ custodia = "custodia.main:main"
 # Ferramentas de empacotamento/publicacao: `pip install -e ".[dev]"`
 dev = ["build>=1.0", "twine>=5.0"]
 
-# Provedores de LLM que NAO vem no pacote base. Instale so o que voce vai usar:
-#   pip install "custodia-cli[google]"
-# O nome do extra e o mesmo valor que vai em AGENT_PROVIDER no .env.
-google = ["langchain-google-genai>=2.0"]
-bedrock = ["langchain-aws>=0.2"]
-ollama = ["langchain-ollama>=0.2"]
-
-# Extras vazios de compatibilidade: `openai`/`azure` (langchain-openai) e `rag`
-# (iaragenai) viraram dependencia base. Ficam declarados para que quem seguiu a
-# instrucao antiga -- `pip install "custodia-cli[openai]"` -- continue
-# funcionando sem o aviso "does not provide the extra".
+# Nao existe extra de provedor: os dois suportados (anthropic e iara) vem no
+# install base. Estes ficam declarados VAZIOS so por compatibilidade -- o
+# agente ja aceitou seis provedores, e quem seguiu a instrucao antiga
+# (`pip install "custodia-cli[openai]"`) continua instalando sem o aviso
+# "does not provide the extra".
 openai = []
 azure = []
+google = []
+bedrock = []
+ollama = []
 rag = []
 
 [tool.setuptools.packages.find]

@@ -50,13 +50,12 @@ Qualquer uma das duas cria o comando `custodia` no PATH do ambiente.
 
 O install já traz, sem extras:
 
-- **`langchain-anthropic`** e **`langchain-openai`** — ou seja, `AGENT_PROVIDER` pode
-  ser `anthropic`, `openai` ou `azure` sem instalar mais nada. Gemini, Bedrock e
-  Ollama continuam opcionais: `pip install "custodia-cli[google]"` (ou `[bedrock]`,
-  `[ollama]`).
-- **`iaragenai`** — o SDK interno da base de conhecimento, que **só existe no
-  Artifactory**. Dentro da rede da empresa, com o índice interno configurado, ele
-  resolve junto com o resto.
+- **`langchain-anthropic`** e **`langchain-openai`** — os dois provedores suportados
+  (`anthropic` e `iara`) funcionam sem instalar mais nada; trocar entre eles é só
+  mexer no `.env`.
+- **`iaragenai`** — o SDK interno, que serve tanto ao provedor `iara` quanto à base
+  de conhecimento. **Só existe no Artifactory**: dentro da rede da empresa, com o
+  índice interno configurado, ele resolve junto com o resto.
 
 > **Fora da rede da empresa** o `pip` falha ao procurar o `iaragenai` no PyPI público.
 > Para desenvolver assim, instale sem resolver dependências e traga o resto do
@@ -67,8 +66,9 @@ O install já traz, sem extras:
 > pip install -r requirements.txt
 > ```
 >
-> Sem o `iaragenai` o agente inteiro funciona — só a busca na KB fica indisponível,
-> avisando isso na conversa.
+> Sem o `iaragenai` o agente inteiro funciona com `AGENT_PROVIDER=anthropic` — o que
+> fica indisponível é o provedor `iara` e a busca na KB, os dois avisando isso com
+> todas as letras em vez de estourar um erro de import.
 
 > **Depois de um `git pull` que mexa nas dependências, rode `pip install -e .` de novo.**
 > Um install editável já existente aponta para o código novo, mas **não** instala
@@ -99,31 +99,34 @@ pip install custodia-cli --index-url https://artifactory.prod.aws.cloud.ihf/arti
 > Duas saídas: use um venv (recomendado), ou chame `python -m custodia`, que
 > funciona igual sem depender do PATH.
 
-### Chave da Anthropic
+### Qual modelo responde (`AGENT_PROVIDER`)
 
-A **conversa** usa Claude, então precisa de chave. Copie `.env.example` para `.env`
-na pasta do seu repositório e preencha:
+São **dois** provedores, um para cada lugar onde o agente roda:
+
+| `AGENT_PROVIDER` | Onde | Credencial | Modelo padrão |
+|---|---|---|---|
+| `anthropic` *(padrão)* | sua máquina | `ANTHROPIC_API_KEY` | `claude-opus-5` |
+| `iara` | rede da empresa | `IARA_CLIENT_ID` + `IARA_CLIENT_SECRET` | `gpt-4.1-mini` |
+
+Os dois vêm no install; trocar é só mexer no `.env`, e o `/status` mostra qual está
+valendo. O grafo do agente não muda — os dois entregam um chat model do LangChain
+com a mesma interface.
+
+Os comandos determinísticos (`/initialize`, `/status`, `/infra`) **não** usam LLM e
+continuam funcionando sem credencial nenhuma — o agente só é ligado no primeiro turno
+de conversa.
+
+### Claude (na sua máquina)
+
+Copie `.env.example` para `.env` na pasta do seu repositório e preencha:
 
 ```
+AGENT_PROVIDER=anthropic
 ANTHROPIC_API_KEY=sk-ant-...
 AGENT_MODEL=claude-opus-5   # opcional
 ```
 
-Os comandos determinísticos (`/initialize`, `/status`) **não** usam LLM e continuam
-funcionando sem chave nenhuma — o agente só é ligado no primeiro turno de conversa.
-
-### Qual modelo responde (`AGENT_PROVIDER`)
-
-| `AGENT_PROVIDER` | Credencial | Vem no pacote base? |
-|---|---|---|
-| `iara` | `IARA_CLIENT_ID` + `IARA_CLIENT_SECRET` | ✅ |
-| `anthropic` *(padrão)* | `ANTHROPIC_API_KEY` | ✅ |
-| `openai` | `OPENAI_API_KEY` | ✅ |
-| `azure` | `AZURE_OPENAI_API_KEY` | ✅ |
-| `google` / `bedrock` / `ollama` | `GOOGLE_API_KEY` / profile AWS / — | extra (`pip install "custodia-cli[google]"`) |
-
-O `/status` mostra qual está valendo. Trocar de provedor é só mexer no `.env` — o
-grafo do agente não muda.
+A chave sai de https://console.anthropic.com/settings/keys.
 
 ### Gateway interno (IaraGenAI)
 
@@ -154,26 +157,16 @@ dele.
 > O `IARA_CLIENT_SECRET` é credencial: mantenha no `.env` (que está no `.gitignore`)
 > ou nas variáveis de ambiente da sua conta — nunca no código.
 
-### Azure OpenAI
-
-Além da chave, o Azure exige a **versão da API** — ela é do endpoint, não do modelo,
-e o cliente nem inicializa sem ela (*"Must provide either the `api_version` argument
-or the `OPENAI_API_VERSION` environment variable"*). O agente já usa um padrão GA
-(`2024-10-21`); para fixar outra, preencha `AZURE_OPENAI_API_VERSION`.
-
-Se você configura as credenciais como **variáveis de ambiente da sua conta** (em vez
-do `.env`), defina o `OPENAI_API_KEY` junto — bibliotecas compatíveis com a API da
-OpenAI recusam iniciar sem essa variável, mesmo quando quem autentica é o Azure:
+Se preferir as credenciais como **variáveis de ambiente da sua conta**, em vez do
+`.env`:
 
 ```powershell
-[Environment]::SetEnvironmentVariable("AZURE_OPENAI_API_KEY", "<sua-chave>", "User")
-[Environment]::SetEnvironmentVariable("OPENAI_API_KEY", "sk-no-key-required", "User")
+[Environment]::SetEnvironmentVariable("IARA_CLIENT_ID", "<seu-id>", "User")
+[Environment]::SetEnvironmentVariable("IARA_CLIENT_SECRET", "<seu-secret>", "User")
 ```
 
 > Abra um terminal novo depois: variável de ambiente só entra em processo que nasce
-> depois dela. O agente também preenche essa sentinela sozinho em runtime quando a
-> variável está ausente **ou vazia** — o `setx` acima é para as outras ferramentas do
-> seu ambiente que leem a mesma variável.
+> depois dela.
 
 ## Uso
 
