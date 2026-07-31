@@ -1,0 +1,88 @@
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	tipo_projeto(tipo_projeto)
+	ambientes(ambientes)
+	validar_perfis(validar_perfis)
+	confirmar_perfis(confirmar_perfis)
+	app_sigla(app_sigla)
+	app_sigla_app(app_sigla_app)
+	app_produto(app_produto)
+	app_context(app_context)
+	app_squad(app_squad)
+	app_feature_name(app_feature_name)
+	app_microservice_name(app_microservice_name)
+	app_owner_email(app_owner_email)
+	app_tech_email(app_tech_email)
+	app_finops_squad(app_finops_squad)
+	app_finops_projeto(app_finops_projeto)
+	app_finops_oferta(app_finops_oferta)
+	app_finops_servico(app_finops_servico)
+	app_container_port(app_container_port)
+	app_tempo_ms(app_tempo_ms)
+	app_concorrencia(app_concorrencia)
+	secret(secret)
+	conectar_ambiente(conectar_ambiente)
+	cluster(cluster)
+	vpc(vpc)
+	carregar_subnets(carregar_subnets)
+	subnets(subnets)
+	cidrs(cidrs)
+	filas(filas)
+	vazao(vazao)
+	sts_interno(sts_interno)
+	sts_externo(sts_externo)
+	fechar_ambiente(fechar_ambiente)
+	revisar(revisar)
+	escrever(escrever)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> tipo_projeto;
+	ambientes --> validar_perfis;
+	app_concorrencia --> secret;
+	app_container_port --> app_tempo_ms;
+	app_context --> app_squad;
+	app_feature_name --> app_microservice_name;
+	app_finops_oferta --> app_finops_servico;
+	app_finops_projeto --> app_finops_oferta;
+	app_finops_servico --> app_container_port;
+	app_finops_squad --> app_finops_projeto;
+	app_microservice_name --> app_owner_email;
+	app_owner_email --> app_tech_email;
+	app_produto --> app_context;
+	app_sigla --> app_sigla_app;
+	app_sigla_app --> app_produto;
+	app_squad --> app_feature_name;
+	app_tech_email --> app_finops_squad;
+	app_tempo_ms --> app_concorrencia;
+	carregar_subnets -. &nbsp;parar&nbsp; .-> __end__;
+	carregar_subnets -. &nbsp;continuar&nbsp; .-> subnets;
+	cidrs --> filas;
+	cluster --> vpc;
+	conectar_ambiente -. &nbsp;parar&nbsp; .-> __end__;
+	conectar_ambiente -. &nbsp;continuar&nbsp; .-> cluster;
+	confirmar_perfis -. &nbsp;parar&nbsp; .-> __end__;
+	confirmar_perfis -. &nbsp;continuar&nbsp; .-> app_sigla;
+	fechar_ambiente -. &nbsp;parar&nbsp; .-> __end__;
+	fechar_ambiente -. &nbsp;proximo&nbsp; .-> conectar_ambiente;
+	fechar_ambiente -.-> revisar;
+	filas --> vazao;
+	revisar -. &nbsp;parar&nbsp; .-> __end__;
+	revisar -.-> escrever;
+	secret --> conectar_ambiente;
+	sts_externo --> fechar_ambiente;
+	sts_interno --> sts_externo;
+	subnets --> cidrs;
+	tipo_projeto -. &nbsp;parar&nbsp; .-> __end__;
+	tipo_projeto -. &nbsp;continuar&nbsp; .-> ambientes;
+	validar_perfis -. &nbsp;parar&nbsp; .-> __end__;
+	validar_perfis -. &nbsp;continuar&nbsp; .-> confirmar_perfis;
+	vazao --> sts_interno;
+	vpc --> carregar_subnets;
+	escrever --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc

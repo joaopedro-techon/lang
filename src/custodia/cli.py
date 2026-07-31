@@ -73,7 +73,8 @@ from .infra import (
     STATUS_ESCRITO,
     build_infra_graph,
 )
-from .questions import Q_DEPENDENCIAS
+from .grafos import GRAFOS, destino, exportar, mermaid
+from .questions import Q_DEPENDENCIAS, Question
 from .spec import SpecError, load_spec, spec_path
 from .terraform import InfraNaoEncontrada, localizar_infra
 from .ui import LARGURA, WizardAbortado, console, perguntar_no_terminal, titulo
@@ -433,6 +434,62 @@ def _relatar_infra(estado: dict[str, Any]) -> None:
     console.print("\n[yellow]O /infra terminou sem produzir um resultado.[/yellow]\n")
 
 
+def cmd_grafo(root: Path) -> bool:
+    """Desenha os grafos do agente, em Mermaid, a partir do proprio codigo.
+
+    Deterministico como os outros wizards, e por um motivo alem do custo: o
+    desenho tem de valer numa maquina sem credencial. Desenhar o grafo da
+    conversa NAO chama modelo -- so le a estrutura de nos e arestas.
+    """
+    titulo("/grafo - os grafos do agente")
+    print()
+    console.print(
+        "[dim]O desenho sai do grafo compilado, nao de um arquivo escrito a mao:\n"
+        "mudou a estrutura no codigo, muda aqui.[/dim]\n"
+    )
+
+    for item in GRAFOS:
+        selo = "com LLM" if item.usa_llm else "deterministico"
+        console.print(
+            Panel(
+                Text(mermaid(item.slug).strip()),
+                title=escape(f"{item.rotulo}  ·  {selo}"),
+                subtitle=escape(item.nota),
+                border_style="yellow" if item.usa_llm else "cyan",
+                padding=(1, 2),
+            )
+        )
+        print()
+
+    alvos = [destino(item.slug) for item in GRAFOS]
+    pergunta = Question(
+        id="confirm",
+        kind="confirm",
+        title="Gravar estes diagramas no projeto?",
+        help="Serao escritos:\n" + "\n".join(f"  {caminho}" for caminho in alvos),
+    )
+
+    try:
+        if not perguntar_no_terminal(pergunta.to_dict()):
+            console.print("\n[yellow]Nada foi gravado.[/yellow]\n")
+            _nota_de_fluxo_deterministico()
+            return True
+    except WizardAbortado:
+        console.print("\n[yellow]/grafo cancelado. Nada foi gravado.[/yellow]\n")
+        return True
+
+    escritos = exportar()
+    console.print(f"\n[green]Diagramas gravados.[/green] {len(escritos)} arquivo(s):\n")
+    for caminho in escritos:
+        console.print(f"  [dim]{escape(str(caminho))}[/dim]")
+    console.print(
+        "\n[dim]Sao arquivos GERADOS -- nao edite a mao. Colado dentro de uma\n"
+        "cerca ```mermaid, o conteudo deles vira diagrama no GitHub.[/dim]\n"
+    )
+    _nota_de_fluxo_deterministico()
+    return True
+
+
 def cmd_status(root: Path) -> bool:
     """Mostra a spec ja salva no projeto, se houver."""
     # Antes da spec: quem vai responder e se a base de conhecimento esta ligada.
@@ -521,6 +578,12 @@ _COMANDOS_UNICOS: tuple[Comando, ...] = (
         "/infra",
         "Configura o terraform do worker (dev/hom/prod) consultando a AWS.",
         cmd_infra,
+    ),
+    Comando(
+        "/grafo",
+        "Desenha os grafos do agente (Mermaid) a partir do codigo.",
+        cmd_grafo,
+        apelidos=("/graph",),
     ),
     Comando("/status", "Mostra a configuracao ja salva neste projeto.", cmd_status),
     Comando("/exit", "Sai do agente.", cmd_exit, apelidos=("/quit",)),

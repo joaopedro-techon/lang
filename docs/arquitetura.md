@@ -66,33 +66,49 @@ O que ganhamos usando o grafo:
 
 ## 3. O fluxo do `/initialize`
 
+```mermaid
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	tipo_projeto(tipo_projeto)
+	gatilho(gatilho)
+	fila(fila)
+	throughput(throughput)
+	dependencias(dependencias)
+	revisar(revisar)
+	salvar(salvar)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> tipo_projeto;
+	dependencias --> revisar;
+	fila --> throughput;
+	gatilho -. &nbsp;parar&nbsp; .-> __end__;
+	gatilho -. &nbsp;continuar&nbsp; .-> fila;
+	revisar -. &nbsp;parar&nbsp; .-> __end__;
+	revisar -.-> salvar;
+	throughput --> dependencias;
+	tipo_projeto -. &nbsp;parar&nbsp; .-> __end__;
+	tipo_projeto -. &nbsp;continuar&nbsp; .-> gatilho;
+	salvar --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
 ```
-START
-  │
-  ▼
-tipo do projeto? ───── "App" ─────────────► END   (feature indisponível)
-  │ "Worker"
-  ▼
-gatilho? ───────────── "Schedule" ────────► END   (feature indisponível)
-  │ "SQS"
-  ▼
-nome da fila SQS
-  │
-  ▼
-mensagens por segundo
-  │
-  ▼
-dependências (multi-escolha)
-  │
-  ▼
-revisar / confirmar ── "não" ─────────────► END   (cancelado)
-  │ "sim"
-  ▼
-grava .custodia/spec.json ────────► END
-```
+
+As saídas `parar` são, na ordem: "App ainda não existe", "Schedule ainda não existe" e
+"não confirmou na revisão".
 
 Repare que **nenhuma escrita em disco acontece antes da confirmação**. Os caminhos
 que terminam em "feature indisponível" ou "cancelado" não deixam rastro.
+
+> Este diagrama é **gerado** pelo `/grafo`, a partir do grafo compilado — não é
+> desenhado à mão. Os três grafos ficam em
+> [`.custodia/grafos/`](../.custodia/grafos), incluindo o do `/infra`, grande demais
+> para caber aqui. Depois de mexer em nós ou arestas, rode `/grafo` e commite o que
+> mudou.
 
 ---
 

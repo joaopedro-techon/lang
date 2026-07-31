@@ -1,0 +1,29 @@
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	tipo_projeto(tipo_projeto)
+	gatilho(gatilho)
+	fila(fila)
+	throughput(throughput)
+	dependencias(dependencias)
+	revisar(revisar)
+	salvar(salvar)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> tipo_projeto;
+	dependencias --> revisar;
+	fila --> throughput;
+	gatilho -. &nbsp;parar&nbsp; .-> __end__;
+	gatilho -. &nbsp;continuar&nbsp; .-> fila;
+	revisar -. &nbsp;parar&nbsp; .-> __end__;
+	revisar -.-> salvar;
+	throughput --> dependencias;
+	tipo_projeto -. &nbsp;parar&nbsp; .-> __end__;
+	tipo_projeto -. &nbsp;continuar&nbsp; .-> gatilho;
+	salvar --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc

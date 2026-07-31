@@ -30,12 +30,24 @@ from .prompts import SYSTEM_PROMPT
 from .tools import ALL_TOOLS
 
 
-def build_graph():
-    """Constroi e compila o grafo do agente."""
+def build_graph(llm_com_tools=None):
+    """Constroi e compila o grafo do agente.
+
+    `llm_com_tools` existe para quem quer a ESTRUTURA do grafo sem ter um
+    modelo: o /grafo desenha este mesmo grafo numa maquina sem credencial
+    nenhuma. Repare que o objeto so e usado dentro do no `assistant`, ou seja,
+    no `invoke` -- montar e desenhar o grafo nunca toca nele. Por isso passar um
+    substituto inerte e seguro, e por isso o valor tem de ser injetavel: com a
+    chamada fixa aqui dentro, `build_graph()` exigiria credencial so para
+    responder "quais sao os nos e as arestas".
+
+    Quem quer conversar de verdade chama sem argumento e recebe o modelo real.
+    """
 
     # O modelo, com as ferramentas "amarradas" a ele (assim ele sabe quais
     # existem e pode pedir para chama-las) e com o cache de prompt ligado.
-    llm_com_tools = build_llm_com_tools(ALL_TOOLS)
+    if llm_com_tools is None:
+        llm_com_tools = build_llm_com_tools(ALL_TOOLS)
 
     def assistant(state: MessagesState) -> dict:
         """No do modelo: injeta o system prompt e chama o LLM."""

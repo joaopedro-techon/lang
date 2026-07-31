@@ -18,6 +18,7 @@ Construído com **LangGraph** sobre **Claude** — dois modos no mesmo shell: a 
 | *(texto solto)* ou `/chat` | Conversa: dúvidas e alterações no código | ✅ disponível |
 | `/initialize` | Pergunta o tipo do projeto e grava a spec | ✅ disponível |
 | `/infra` | Escreve o Terraform do worker (dev/hom/prod) consultando a AWS | ✅ disponível |
+| `/grafo` | Desenha os grafos do agente (Mermaid) a partir do código | ✅ disponível |
 | `/status` | Mostra a spec já salva no projeto | ✅ disponível |
 | `/help`, `/exit` | Ajuda e saída | ✅ disponível |
 | `/generate` | Gera `pom.xml` e o listener SQS a partir da spec | 🚧 em breve |
@@ -425,11 +426,43 @@ src/custodia/
 ├── terraform.py    │  viajam dentro da wheel.
 ├── dimensionamento.py ┘  a fórmula do autoscaling, isolada e testável
 │
+├── grafos.py       o registro dos grafos + a exportação em Mermaid (/grafo)
+│
 ├── chat.py         ┐  a conversa: histórico + streaming das chamadas de
 ├── graph.py        ├─ ferramenta na tela, sobre o agente ReAct
 ├── tools.py        │  (Claude + ferramentas, com aprovação s/N na escrita)
 └── prompts.py      ┘
 ```
+
+## O `/grafo`
+
+Desenha os três grafos do agente — a conversa, o `/initialize` e o `/infra` — em
+**Mermaid**, e grava um `.mmd` por grafo em `.custodia/grafos/`, dentro do projeto onde
+você abriu a CLI.
+
+> Fica no `.custodia/` — a pasta do agente, onde já mora a `spec.json` — e não em
+> `docs/`. A CLI roda no repositório do cliente, e a pasta de documentação é dele:
+> despejar ali os diagramas das entranhas do agente seria invadir a casa de quem só
+> queria usar a ferramenta.
+
+O desenho sai de `grafo.get_graph().draw_mermaid()`, ou seja, **do grafo compilado**.
+Isso não é detalhe: diagrama escrito à mão envelhece em silêncio, e o erro só aparece
+quando alguém apresenta. Aqui, mexeu em nó ou aresta, rode `/grafo` e o diff mostra o
+que mudou.
+
+```powershell
+custodia
+> /grafo
+```
+
+Não há dependência nova nem chamada de rede: o Mermaid é gerado localmente (ao
+contrário do `draw_mermaid_png()`, que manda a estrutura do grafo para a API pública do
+`mermaid.ink`). E **não precisa de credencial** — desenhar o grafo da conversa só lê
+nós e arestas, não chama modelo.
+
+> Os `.mmd` são **gerados**: não edite à mão. Colado dentro de uma cerca
+> ` ```mermaid `, o conteúdo deles vira diagrama renderizado no GitHub — é assim que
+> [`docs/arquitetura.md`](docs/arquitetura.md) e a apresentação os exibem.
 
 📖 **[docs/arquitetura.md](docs/arquitetura.md)** explica em detalhe os conceitos do
 LangGraph usados (state, nós, arestas condicionais, `interrupt`, checkpointer), a
