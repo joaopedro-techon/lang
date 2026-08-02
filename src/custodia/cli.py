@@ -41,6 +41,7 @@ from rich.table import Table
 from rich.text import Text
 
 from . import NOME, __version__
+from . import aws
 from . import config
 from . import iara
 from .chat import ChatIndisponivel, Conversa, loop_de_conversa
@@ -385,6 +386,10 @@ def cmd_infra(root: Path) -> bool:
         spec = None
     if spec is not None and spec.sqs is not None:
         sugestao = spec.sqs.messages_per_second
+
+    # O wizard tambem consulta a AWS: abre a janela dele para nao gastar o
+    # orcamento de um turno de conversa (nem herdar o cache dele).
+    aws.nova_janela()
 
     grafo = build_infra_graph()
     config = {"configurable": {"thread_id": uuid4().hex}}
