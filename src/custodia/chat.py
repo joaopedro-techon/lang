@@ -20,14 +20,29 @@ from dataclasses import dataclass
 from typing import Any
 
 from langchain_core.messages import HumanMessage
+from langgraph.errors import GraphRecursionError
 from rich.markdown import Markdown
 from rich.markup import escape
 from rich.padding import Padding
 
 from . import NOME
+from .aws import nova_janela
 from .graph import build_graph
 from .llm import LLMIndisponivel, verificar_credenciais
 from .ui import console
+
+# Quantas VOLTAS o loop ReAct pode dar num turno. Cada ida ao modelo e cada
+# execucao de ferramenta contam uma, entao 40 sao ~20 chamadas de ferramenta --
+# folgado para uma tarefa real, curto para um modelo que ficou preso repetindo
+# a mesma coisa.
+#
+# O LangGraph ja para sozinho em 25 se ninguem disser nada; deixamos explicito
+# porque este numero e uma decisao (quanto de insistencia vale a pena pagar), e
+# nao um padrao de biblioteca que muda de versao para versao sem avisar.
+#
+# Ele limita as VOLTAS, nao as chamadas a AWS: uma volta so pode pedir varias
+# ferramentas de uma vez. Quem segura a AWS e o orcamento do `aws.py`.
+MAX_VOLTAS = 40
 
 # Quanto do retorno de uma ferramenta aparece na tela. O modelo recebe tudo;
 # isto e so para o humano acompanhar sem afogar o terminal.
@@ -106,6 +121,12 @@ class Conversa:
         """
         grafo = self._garantir_grafo()
 
+        # Comeca um turno: o orcamento de chamadas a AWS e o cache de respostas
+        # valem daqui ate o fim desta pergunta. Contador de sessao inteira
+        # puniria quem conversa muito; contador por chamada nao pegaria loop
+        # nenhum. O turno e a janela certa.
+        nova_janela()
+
         # So confirmamos o historico se o turno inteiro der certo. Assim uma
         # chamada que estourou no meio nao deixa a conversa em estado quebrado.
         entrada = [*self._mensagens, HumanMessage(content=texto)]
@@ -120,7 +141,11 @@ class Conversa:
         pensando = console.status("[dim]pensando...[/dim]", spinner="dots")
         pensando.start()
         try:
-            for estado in grafo.stream({"messages": entrada}, stream_mode="values"):
+            for estado in grafo.stream(
+                {"messages": entrada},
+                {"recursion_limit": MAX_VOLTAS},
+                stream_mode="values",
+            ):
                 pensando.stop()
                 mensagens = estado["messages"]
                 for mensagem in mensagens[ja_exibidas:]:
@@ -137,6 +162,19 @@ class Conversa:
                     pensando.start()
         except KeyboardInterrupt:
             console.print("\n[yellow]  (interrompido -- o historico ate aqui foi mantido)[/yellow]")
+            return
+        except GraphRecursionError:
+            # O agente girou MAX_VOLTAS vezes sem chegar a uma resposta. A
+            # excecao crua diria "recursion limit reached", que parece defeito
+            # do agente; o que aconteceu de fato foi ele nao ter convergido, e
+            # quem le precisa saber que a culpa pode estar na pergunta.
+            console.print(
+                f"\n[yellow]  O agente deu {MAX_VOLTAS} voltas sem fechar uma "
+                "resposta e foi interrompido.[/yellow]\n"
+                "  [dim]Costuma ser pergunta ampla demais ou ferramenta "
+                "devolvendo erro em looping. Refaca mais especifica -- esta "
+                "pergunta nao entrou no historico.[/dim]\n"
+            )
             return
         except Exception as exc:
             console.print(f"\n[red]  Erro ao falar com o modelo:[/red] {_explicar_erro(exc)}\n")

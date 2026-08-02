@@ -240,6 +240,25 @@ Aprovar? [s/N]
 Nada é alterado à sua revelia. As ferramentas também são sandboxed na pasta do
 projeto: o agente não escapa dela.
 
+**Consulta à AWS tem teto.** Um agente que se convence de que a resposta anterior
+não serviu refaz a mesma consulta indefinidamente — e no Cost Explorer cada
+requisição é cobrada. Três cercas, em camadas diferentes:
+
+| onde | o quê | por quê |
+|---|---|---|
+| `chat.py` | `MAX_VOLTAS = 40` no `recursion_limit` | corta o loop ReAct que não converge |
+| `aws.py` | `LIMITE_POR_TURNO = 40` chamadas | uma volta só pode pedir várias ferramentas; o limite de voltas não segura isso |
+| `aws.py` | `LIMITES_POR_SERVICO = {"ce": 12}` | requisição ao Cost Explorer custa US$ 0,01 — aqui o teto protege a fatura |
+
+O teto vive no `aws.chamar`, a porta única por onde toda chamada à AWS passa, e
+não dentro de cada ferramenta: ferramenta nova já nasce coberta. Junto dele há um
+**cache por turno** — consulta repetida não vai à AWS de novo nem conta contra o
+teto, porque não custou nada. Cachear só é seguro porque nada ali escreve.
+
+Estourar o teto não derruba o turno: vira texto de erro que manda o modelo parar
+e responder com o que já tem. A janela (contador + cache) zera a cada pergunta e
+a cada `/infra`.
+
 `/chat` abre o mesmo agente num sub-prompt dedicado (`voce>`), com `/limpar` para
 esquecer o histórico e `/sair` para voltar. Os dois caminhos **compartilham a mesma
 conversa** — o histórico continua o mesmo quando você alterna entre eles.
@@ -425,6 +444,9 @@ src/custodia/
 ├── aws.py          ├─ terraform. `templates/worker/` guarda os .tf que
 ├── terraform.py    │  viajam dentro da wheel.
 ├── dimensionamento.py ┘  a fórmula do autoscaling, isolada e testável
+│
+├── custos.py       o Cost Explorer pela CLI: quanto a conta gastou e o que
+│                   mudou de um período para o outro (só leitura)
 │
 ├── grafos.py       o registro dos grafos + a exportação em Mermaid (/grafo)
 │

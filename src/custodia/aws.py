@@ -60,9 +60,88 @@ _SINAIS_DE_SSL = (
 # repeticao a cada consulta. Mesma ideia do `_navegacao_quebrada` no ui.py.
 _sem_verificacao_ssl = False
 
+# ---------------------------------------------------------------------------
+# Orcamento de chamadas
+# ---------------------------------------------------------------------------
+# O `/infra` e um grafo deterministico: ele faz um numero conhecido de
+# consultas e acaba. O AGENTE nao -- ele decide sozinho quando chamar
+# ferramenta, e um modelo que se convence de que a resposta anterior nao serviu
+# refaz a mesma consulta indefinidamente. O `recursion_limit` do LangGraph
+# limita as VOLTAS do loop, nao as chamadas: uma unica volta pode pedir varias
+# ferramentas, e cada ferramenta de custo pode consultar tres contas.
+#
+# Por isso o teto fica aqui, na porta unica por onde toda chamada a AWS passa,
+# e nao dentro de cada ferramenta: ferramenta nova ja nasce coberta.
+LIMITE_POR_TURNO = 40
+
+# Tetos mais apertados, por servico (a primeira palavra do comando). O `ce` tem
+# o seu porque requisicao ao Cost Explorer e COBRADA -- US$ 0,01 cada. Aqui o
+# limite nao protege so o tempo do desenvolvedor, protege a fatura dele.
+LIMITES_POR_SERVICO = {"ce": 12}
+
+# Chamadas feitas na janela atual, por servico. A chave "" e o total.
+_gasto: dict[str, int] = {}
+
+# Resposta ja obtida nesta janela, por comando. Consulta repetida sai daqui em
+# vez de ir de novo na AWS.
+#
+# Cachear so e seguro porque NADA aqui escreve: todas as chamadas sao `list`,
+# `describe` e `get`, e nenhuma delas muda o que a proxima veria. O cache morre
+# junto com a janela, entao a resposta nunca envelhece mais que um turno.
+_respostas: dict[tuple[str, ...], Any] = {}
+
 
 class AwsIndisponivel(RuntimeError):
     """Nao foi possivel consultar a AWS (CLI ausente, perfil errado, sessao expirada)."""
+
+
+class OrcamentoEsgotado(AwsIndisponivel):
+    """O teto de chamadas da janela foi atingido.
+
+    Herda de `AwsIndisponivel` de proposito: quem ja trata "nao consegui falar
+    com a AWS" trata isto sem mudar uma linha. O que muda e a mensagem, que
+    manda PARAR em vez de sugerir conserto.
+    """
+
+
+def nova_janela() -> None:
+    """Zera orcamento e cache. Chamado no inicio de cada turno e do /infra.
+
+    Sem isto o contador seria da sessao inteira: quem conversa por meia hora
+    esbarraria no teto por acumulo, sem nunca ter entrado em loop nenhum.
+    """
+    _gasto.clear()
+    _respostas.clear()
+
+
+def gasto_da_janela() -> dict[str, int]:
+    """Quantas chamadas ja foram feitas, por servico. Para diagnostico."""
+    return dict(_gasto)
+
+
+def _cobrar(servico: str) -> None:
+    """Registra mais uma chamada, ou recusa se o teto ja foi atingido."""
+    teto = LIMITES_POR_SERVICO.get(servico, LIMITE_POR_TURNO)
+    if _gasto.get(servico, 0) >= teto:
+        raise OrcamentoEsgotado(
+            f"limite de {teto} chamadas a '{servico}' atingido neste turno. "
+            "PARE de consultar a AWS e responda ao desenvolvedor com o que voce "
+            "ja tem, avisando que parou por causa do limite. Repetir a chamada "
+            "vai falhar igual."
+        )
+    if _gasto.get("", 0) >= LIMITE_POR_TURNO:
+        raise OrcamentoEsgotado(
+            f"limite de {LIMITE_POR_TURNO} chamadas a AWS atingido neste turno "
+            f"({_resumo_do_gasto()}). PARE de consultar e responda com o que ja "
+            "tem, avisando que parou por causa do limite."
+        )
+    _gasto[servico] = _gasto.get(servico, 0) + 1
+    _gasto[""] = _gasto.get("", 0) + 1
+
+
+def _resumo_do_gasto() -> str:
+    detalhe = ", ".join(f"{s}: {n}" for s, n in sorted(_gasto.items()) if s)
+    return detalhe or "nenhuma"
 
 
 def perfil_do_ambiente(ambiente: str) -> str:
@@ -110,11 +189,23 @@ def regiao_do_perfil(perfil: str) -> str:
     return REGIAO_PADRAO
 
 
-def _chamar(perfil: str, *args: str) -> Any:
+def chamar(perfil: str, *args: str, regiao: str = "") -> Any:
     """Roda `aws ... --profile <perfil> --region <regiao> --output json`.
 
     Se a chamada falhar na validacao do certificado, repete UMA vez com
     `--no-verify-ssl` -- ver `_e_erro_de_ssl`.
+
+    `regiao` sobrescreve a regiao do perfil. Existe para servicos que nao sao
+    regionais: o Cost Explorer (`custos.py`) tem um endpoint so para a particao
+    inteira, e chamar ele em sa-east-1 resolveria um host que nao existe.
+
+    E publica -- e nao `_chamar` -- porque o `custos.py` consulta a AWS com esta
+    mesma mecanica (perfil, fallback de TLS, diagnostico do erro), e duplicar
+    isso la seria manter duas verdades sobre como falamos com a CLI.
+
+    Toda chamada passa pelo orcamento da janela e pelo cache -- ver
+    `LIMITE_POR_TURNO`. Consulta repetida nao vai na AWS de novo, e nem conta
+    contra o teto: ela nao custou nada.
     """
     global _sem_verificacao_ssl
 
@@ -124,10 +215,20 @@ def _chamar(perfil: str, *args: str) -> Any:
             f"({', '.join(PERFIS.values())})."
         )
 
+    # O perfil entra na chave: a MESMA consulta em dev e em prod sao duas
+    # perguntas diferentes, e responder uma com o cache da outra seria pior que
+    # nao cachear.
+    assinatura = (perfil, regiao, *args)
+    if assinatura in _respostas:
+        return _respostas[assinatura]
+
+    # O servico e a primeira palavra do comando ("ce", "ec2", "sts"...).
+    _cobrar(args[0] if args else "?")
+
     comando = [
         "aws", *args,
         "--profile", perfil,
-        "--region", regiao_do_perfil(perfil),
+        "--region", regiao or regiao_do_perfil(perfil),
         "--output", "json",
     ]
     resultado = _rodar(comando, sem_verificar=_sem_verificacao_ssl)
@@ -145,9 +246,15 @@ def _chamar(perfil: str, *args: str) -> Any:
         raise AwsIndisponivel(_diagnosticar(perfil, resultado.stderr or resultado.stdout))
 
     try:
-        return json.loads(resultado.stdout or "{}")
+        dados = json.loads(resultado.stdout or "{}")
     except json.JSONDecodeError as exc:
         raise AwsIndisponivel(f"resposta da AWS nao e JSON valido: {exc}") from exc
+
+    # So o que deu certo entra no cache. Guardar falha faria o agente carregar
+    # um erro transitorio (sessao que acabou de ser renovada, rede que voltou)
+    # ate o fim do turno.
+    _respostas[assinatura] = dados
+    return dados
 
 
 def _rodar(comando: list[str], sem_verificar: bool = False) -> subprocess.CompletedProcess:
@@ -357,7 +464,7 @@ def identidade(perfil: str) -> dict[str, str]:
     mostrar o numero da conta e a unica forma de o dev perceber que o perfil
     de dev aponta para a conta de producao.
     """
-    dados = _chamar(perfil, "sts", "get-caller-identity")
+    dados = chamar(perfil, "sts", "get-caller-identity")
     return {
         "account": str(dados.get("Account", "?")),
         "arn": str(dados.get("Arn", "?")),
@@ -367,13 +474,13 @@ def identidade(perfil: str) -> dict[str, str]:
 
 def listar_clusters_ecs(perfil: str) -> list[str]:
     """Nomes (nao ARNs) dos clusters ECS da conta."""
-    dados = _chamar(perfil, "ecs", "list-clusters")
+    dados = chamar(perfil, "ecs", "list-clusters")
     return sorted(arn.rsplit("/", 1)[-1] for arn in dados.get("clusterArns", []))
 
 
 def listar_vpcs(perfil: str) -> list[dict[str, str]]:
     """VPCs da conta, com o Name (se houver tag) e o CIDR principal."""
-    dados = _chamar(perfil, "ec2", "describe-vpcs")
+    dados = chamar(perfil, "ec2", "describe-vpcs")
     vpcs = []
     for vpc in dados.get("Vpcs", []):
         vpcs.append(
@@ -392,7 +499,7 @@ def listar_subnets(perfil: str, vpc_id: str) -> list[dict[str, str]]:
     O CIDR vem junto porque o wizard usa essa mesma lista para montar o
     `service_cidr_blocks` -- sem uma segunda consulta.
     """
-    dados = _chamar(
+    dados = chamar(
         perfil, "ec2", "describe-subnets", "--filters", f"Name=vpc-id,Values={vpc_id}"
     )
     subnets = []
@@ -410,13 +517,13 @@ def listar_subnets(perfil: str, vpc_id: str) -> list[dict[str, str]]:
 
 def listar_filas_sqs(perfil: str) -> list[str]:
     """Nomes das filas SQS da conta (a CLI devolve URLs; ficamos com o nome)."""
-    dados = _chamar(perfil, "sqs", "list-queues")
+    dados = chamar(perfil, "sqs", "list-queues")
     return sorted(url.rsplit("/", 1)[-1] for url in dados.get("QueueUrls", []))
 
 
 def listar_secrets(perfil: str) -> list[str]:
     """Nomes dos secrets do Secrets Manager."""
-    dados = _chamar(perfil, "secretsmanager", "list-secrets")
+    dados = chamar(perfil, "secretsmanager", "list-secrets")
     return sorted(s.get("Name", "") for s in dados.get("SecretList", []) if s.get("Name"))
 
 

@@ -23,6 +23,8 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.text import Text
 
+from . import custos
+from .aws import PERFIS, AwsIndisponivel, identidade, perfil_do_ambiente
 from .config import get_project_root, is_auto_approve, resolve_inside_project
 from .conhecimento import KBIndisponivel, consultar
 from .ui import console
@@ -383,6 +385,208 @@ def buscar_conhecimento(consulta: str, limite: int = 0) -> str:
     return "\n\n---\n\n".join(blocos)
 
 
+# ---------------------------------------------------------------------------
+# Custo da conta AWS
+# ---------------------------------------------------------------------------
+# Estas duas ferramentas so LEEM (`ce get-cost-and-usage`), entao nao passam
+# pelo `_confirmar`. A conta e sempre EXPLICITA: nao ha ambiente padrao aqui,
+# porque "quanto gastei" respondido sobre a conta errada e uma resposta que
+# parece certa. Quem nao disse de qual conta fala tem que ser perguntado, e a
+# ferramenta devolve exatamente essa instrucao quando o campo vem vazio.
+
+
+def _ambientes_pedidos(bruto: str) -> list[str]:
+    """Interpreta "prod", "dev,hom" ou "todos" na lista de ambientes.
+
+    Levanta ValueError com um texto ENDERECADO AO MODELO: ele le esse retorno e
+    decide o proximo passo, entao a mensagem diz o que fazer (perguntar), nao
+    so o que faltou.
+    """
+    texto = (bruto or "").strip().lower()
+    if not texto:
+        raise ValueError(
+            "nenhum ambiente informado. PERGUNTE ao desenvolvedor de qual conta "
+            f"ele esta falando ({', '.join(PERFIS)}) e chame de novo com a "
+            "resposta. Nao escolha por ele."
+        )
+
+    if texto in ("todos", "todas", "all"):
+        return list(PERFIS)
+
+    pedidos = [p.strip() for p in texto.replace(";", ",").split(",") if p.strip()]
+    desconhecidos = [p for p in pedidos if p not in PERFIS]
+    if desconhecidos:
+        raise ValueError(
+            f"ambiente desconhecido: {', '.join(desconhecidos)}. "
+            f"Os ambientes desta area sao {', '.join(PERFIS)}. Se o "
+            "desenvolvedor usou outro nome, confirme com ele qual destes ele quis."
+        )
+    # dedup preservando a ordem em que o dev pediu
+    return list(dict.fromkeys(pedidos))
+
+
+def _dinheiro(valor: float) -> str:
+    return f"{valor:,.2f}"
+
+
+def _cabecalho(ambiente: str, perfil: str) -> str:
+    """Identifica a conta antes de mostrar numero nenhum.
+
+    O numero da conta vai junto de proposito: perfil copiado e nao editado e o
+    jeito mais comum de o gasto "de dev" ser, na verdade, o de producao. Se o
+    STS falhar, seguimos assim mesmo -- a consulta de custo logo abaixo vai
+    falhar com um erro melhor que este.
+    """
+    try:
+        conta = identidade(perfil)["account"]
+    except AwsIndisponivel:
+        conta = "?"
+    return f"### {ambiente} (perfil {perfil}, conta {conta})"
+
+
+@tool
+def consultar_custos_aws(ambientes: str, dias: int = 30, agrupar_por: str = "SERVICE", top: int = 10) -> str:
+    """Quanto a conta AWS gastou num periodo, quebrado por servico.
+
+    Use para "quanto gastei nos ultimos X dias", "qual o servico mais caro",
+    "liste os 5 servicos que mais pago". A ferramenta entrega os numeros; a
+    leitura deles (o que chama atencao, o que e esperado) e sua.
+
+    `ambientes` e OBRIGATORIO: "dev", "hom" ou "prod" -- varios separados por
+    virgula ("dev,hom,prod"), ou "todos". Se o desenvolvedor NAO disse de qual
+    conta esta falando, PERGUNTE antes de chamar: nao escolha um ambiente por
+    conta propria nem consulte os tres para adivinhar.
+
+    `dias` e a janela, terminada ONTEM -- o dia de hoje fica de fora porque a
+    AWS ainda esta fechando o consumo dele. Padrao 30.
+
+    `agrupar_por` (padrao SERVICE): SERVICE, USAGE_TYPE, OPERATION, REGION,
+    INSTANCE_TYPE, RECORD_TYPE (separa uso de credito e imposto) ou
+    LINKED_ACCOUNT. Use USAGE_TYPE para detalhar DENTRO de um servico caro.
+
+    `top` e quantas linhas voltam; o resto e somado numa linha "demais".
+    """
+    try:
+        alvos = _ambientes_pedidos(ambientes)
+    except ValueError as exc:
+        return f"ERRO: {exc}"
+
+    periodo = custos.ultimos_dias(dias)
+    limite = max(1, min(int(top), 50))
+    blocos: list[str] = []
+
+    for ambiente in alvos:
+        try:
+            perfil = perfil_do_ambiente(ambiente)
+            cabecalho = _cabecalho(ambiente, perfil)
+            gastos, moeda = custos.por_grupo(perfil, periodo, agrupar_por)
+        except AwsIndisponivel as exc:
+            blocos.append(f"### {ambiente}\nERRO: {exc}")
+            continue
+
+        soma = custos.total(gastos)
+        linhas = [
+            cabecalho,
+            f"periodo: {periodo} ({periodo.dias} dias) | metrica {custos.METRICA} "
+            f"em {moeda} | agrupado por {agrupar_por}",
+            f"total: {_dinheiro(soma)} {moeda}",
+        ]
+        if not gastos:
+            linhas.append("(a AWS nao reportou custo nenhum neste periodo)")
+            blocos.append("\n".join(linhas))
+            continue
+
+        linhas.append("")
+        for posicao, gasto in enumerate(gastos[:limite], start=1):
+            fatia = f"{gasto.valor / soma * 100:.1f}%" if soma else "-"
+            linhas.append(f"{posicao:>2}. {gasto.grupo}  {_dinheiro(gasto.valor)}  ({fatia})")
+
+        resto = gastos[limite:]
+        if resto:
+            # A cauda vai somada, e nao cortada em silencio: sem esta linha o
+            # top 10 pareceria o total, e a soma das partes nao fecharia.
+            unidade = "item" if len(resto) == 1 else "itens"
+            linhas.append(
+                f"    demais {len(resto)} {unidade}  {_dinheiro(custos.total(resto))}"
+            )
+        blocos.append("\n".join(linhas))
+
+    return "\n\n".join(blocos)
+
+
+@tool
+def comparar_custos_aws(ambientes: str, dias: int = 30, agrupar_por: str = "SERVICE", top: int = 10) -> str:
+    """Compara o gasto dos ultimos `dias` com os `dias` imediatamente anteriores.
+
+    Use para "houve reducao de custo em algum servico", "o que subiu ou caiu na
+    conta", "por que a fatura aumentou". Devolve, por servico, quanto era,
+    quanto e e a variacao -- e cabe a voce explicar o que isso significa.
+
+    `ambientes` e OBRIGATORIO, com as MESMAS regras de `consultar_custos_aws`:
+    se o desenvolvedor nao disse a conta, PERGUNTE antes de chamar.
+
+    `dias` define os dois lados da comparacao: 15 compara os ultimos 15 dias
+    (terminados ontem) com os 15 anteriores a eles. Padrao 30.
+
+    `agrupar_por` e `top` funcionam como em `consultar_custos_aws`; aqui o
+    `top` corta de cada lado da lista (as maiores quedas e as maiores altas).
+    """
+    try:
+        alvos = _ambientes_pedidos(ambientes)
+    except ValueError as exc:
+        return f"ERRO: {exc}"
+
+    atual = custos.ultimos_dias(dias)
+    limite = max(1, min(int(top), 50))
+    blocos: list[str] = []
+
+    for ambiente in alvos:
+        try:
+            perfil = perfil_do_ambiente(ambiente)
+            cabecalho = _cabecalho(ambiente, perfil)
+            variacoes, anterior, moeda = custos.comparar(perfil, atual, agrupar_por)
+        except AwsIndisponivel as exc:
+            blocos.append(f"### {ambiente}\nERRO: {exc}")
+            continue
+
+        soma_agora = sum(v.agora for v in variacoes)
+        soma_antes = sum(v.antes for v in variacoes)
+        delta = soma_agora - soma_antes
+        percentual = f"{delta / soma_antes * 100:+.1f}%" if soma_antes else "-"
+
+        linhas = [
+            cabecalho,
+            f"agrupado por {agrupar_por} | metrica {custos.METRICA} em {moeda}",
+            f"atual:    {atual} ({atual.dias} dias)  total {_dinheiro(soma_agora)}",
+            f"anterior: {anterior} ({anterior.dias} dias)  total {_dinheiro(soma_antes)}",
+            f"variacao: {delta:+,.2f} ({percentual})",
+        ]
+
+        quedas = [v for v in variacoes if v.delta < 0][:limite]
+        altas = [v for v in reversed(variacoes) if v.delta > 0][:limite]
+
+        for titulo, grupo in (("caiu", quedas), ("subiu", altas)):
+            linhas.append("")
+            if not grupo:
+                linhas.append(f"{titulo}: nada relevante")
+                continue
+            linhas.append(f"{titulo}:")
+            for variacao in grupo:
+                if variacao.percentual is None:
+                    # Sem base: dizer "+100%" aqui esconderia que o item nem
+                    # existia antes, que costuma ser a informacao principal.
+                    movimento = "(nao existia no periodo anterior)"
+                else:
+                    movimento = f"({variacao.percentual:+.1f}%)"
+                linhas.append(
+                    f"  {variacao.grupo}  {_dinheiro(variacao.antes)} -> "
+                    f"{_dinheiro(variacao.agora)}  {variacao.delta:+,.2f} {movimento}"
+                )
+        blocos.append("\n".join(linhas))
+
+    return "\n\n".join(blocos)
+
+
 # Lista exportada para o grafo montar o ToolNode.
 ALL_TOOLS = [
     list_directory,
@@ -391,4 +595,6 @@ ALL_TOOLS = [
     create_directory,
     run_maven,
     buscar_conhecimento,
+    consultar_custos_aws,
+    comparar_custos_aws,
 ]
