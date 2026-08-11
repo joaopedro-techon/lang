@@ -11,4 +11,4 @@ questionary>=2.0
 # SDK interno (classe IaraGenAI, base de conhecimento). So resolve com o indice
 # do Artifactory configurado -- fora da rede da empresa, comente esta linha: o
 # agente instala e roda sem ela, so a busca na KB fica indisponivel.
-iaragenai
+#iaragenai
