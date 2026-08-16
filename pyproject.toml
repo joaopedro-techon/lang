@@ -70,6 +70,7 @@ custodia = [
     "templates/worker/terraform/*.tf",
     "templates/worker/terraform/iamsr/policy/*.json",
     "templates/worker/terraform/iamsr/trust/*.json",
+    "templates/echobridge/terraform/*.tf",
 ]
 
 # Versao vem de src/custodia/__init__.py -- fonte unica.

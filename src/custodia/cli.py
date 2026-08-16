@@ -380,7 +380,7 @@ def _nota_de_fluxo_deterministico() -> None:
 
 
 def cmd_infra(root: Path) -> bool:
-    """Configura o terraform do worker, um ambiente por vez."""
+    """Configura o terraform (worker ou EchoBridge), um ambiente por vez."""
     titulo("/infra - configuracao da infraestrutura")
 
     # Falhar aqui e melhor do que falhar depois de dezenas de perguntas.
@@ -435,10 +435,26 @@ def _relatar_infra(estado: dict[str, Any]) -> None:
         console.print(f"\n[green]Infra escrita.[/green] {len(escritos)} arquivo(s):\n")
         for caminho in escritos:
             console.print(f"  [dim]{escape(caminho)}[/dim]")
-        console.print(
-            "\n[dim]Proximo passo: revise o diff e rode o terraform "
-            "com o profile do ambiente.[/dim]\n"
-        )
+
+        # O ramo do echobridge tambem APAGA -- as sobras do template de worker
+        # que o modulo dele nao usa. Uma remocao confirmada tem de aparecer no
+        # relatorio; senao o dev descobre pelo `git status`.
+        removidos = estado.get("removidos", [])
+        if removidos:
+            console.print(f"\n[yellow]Removidos[/yellow] {len(removidos)} caminho(s):\n")
+            for caminho in removidos:
+                console.print(f"  [dim]{escape(caminho)}[/dim]")
+
+        # Mensagem de varias linhas e um bloco de proximos passos proprio do
+        # ramo; a de uma linha e so o "Infra escrita." generico.
+        if "\n" in mensagem:
+            console.print()
+            console.print(f"[dim]{escape(mensagem)}[/dim]\n")
+        else:
+            console.print(
+                "\n[dim]Proximo passo: revise o diff e rode o terraform "
+                "com o profile do ambiente.[/dim]\n"
+            )
         return
 
     if status == STATUS_ERRO_AWS:
@@ -594,7 +610,7 @@ _COMANDOS_UNICOS: tuple[Comando, ...] = (
     ),
     Comando(
         "/infra",
-        "Configura o terraform do worker (dev/hom/prod) consultando a AWS.",
+        "Configura o terraform -- worker ou EchoBridge -- consultando a AWS.",
         cmd_infra,
     ),
     Comando(

@@ -521,6 +521,59 @@ def listar_filas_sqs(perfil: str) -> list[str]:
     return sorted(url.rsplit("/", 1)[-1] for url in dados.get("QueueUrls", []))
 
 
+def arns_de_filas_sqs(perfil: str, conta: str, regiao: str) -> list[dict[str, str]]:
+    """Filas da conta com o ARN de cada uma.
+
+    O ARN e MONTADO, nao consultado: `list-queues` devolve so a URL, e pedir os
+    atributos de cada fila seria uma chamada por fila -- numa conta com trinta
+    filas isso sozinho estoura o orcamento da janela. O formato
+    `arn:aws:sqs:<regiao>:<conta>:<nome>` e fixo na AWS, e conta e regiao aqui
+    nao sao chute: vieram do `get-caller-identity` do mesmo perfil.
+    """
+    return [
+        {"nome": nome, "arn": f"arn:aws:sqs:{regiao}:{conta}:{nome}"}
+        for nome in listar_filas_sqs(perfil)
+    ]
+
+
+def listar_topicos_sns(perfil: str) -> list[dict[str, str]]:
+    """Topicos SNS da conta. Aqui o ARN vem pronto da propria API."""
+    dados = chamar(perfil, "sns", "list-topics")
+    topicos = [
+        {"arn": str(t.get("TopicArn", "")), "nome": str(t.get("TopicArn", "")).rsplit(":", 1)[-1]}
+        for t in dados.get("Topics", [])
+        if t.get("TopicArn")
+    ]
+    return sorted(topicos, key=lambda t: t["nome"])
+
+
+def listar_security_groups(perfil: str, vpc_id: str) -> list[dict[str, str]]:
+    """Security groups de uma VPC, com o nome do grupo.
+
+    O EchoBridge pede o security group chamado "default" da VPC. Devolvemos a
+    lista inteira mesmo assim: em VPC compartilhada ha mais de um candidato, e
+    o wizard prefere mostrar todos a adivinhar qual e o certo.
+    """
+    dados = chamar(
+        perfil,
+        "ec2",
+        "describe-security-groups",
+        "--filters",
+        f"Name=vpc-id,Values={vpc_id}",
+    )
+    grupos = [
+        {
+            "id": g.get("GroupId", ""),
+            "nome": g.get("GroupName", ""),
+            "descricao": g.get("Description", ""),
+        }
+        for g in dados.get("SecurityGroups", [])
+    ]
+    # O "default" primeiro: e o que o modulo espera, e deixa-lo no meio de uma
+    # lista alfabetica faria o dev procurar por ele.
+    return sorted(grupos, key=lambda g: (g["nome"] != "default", g["nome"]))
+
+
 def listar_secrets(perfil: str) -> list[str]:
     """Nomes dos secrets do Secrets Manager."""
     dados = chamar(perfil, "secretsmanager", "list-secrets")
