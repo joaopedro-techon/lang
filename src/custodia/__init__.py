@@ -3,4 +3,4 @@
 NOME = "Custod.IA"
 
 # Fonte unica da versao: o pyproject le este atributo (tool.setuptools.dynamic).
-__version__ = "0.5.0"
+__version__ = "0.6.0"
