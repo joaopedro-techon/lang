@@ -30,7 +30,7 @@ from .prompts import SYSTEM_PROMPT
 from .tools import ALL_TOOLS
 
 
-def build_graph(llm_com_tools=None):
+def build_graph(llm_com_tools=None, tools=None, system_prompt=None):
     """Constroi e compila o grafo do agente.
 
     `llm_com_tools` existe para quem quer a ESTRUTURA do grafo sem ter um
@@ -41,17 +41,27 @@ def build_graph(llm_com_tools=None):
     chamada fixa aqui dentro, `build_graph()` exigiria credencial so para
     responder "quais sao os nos e as arestas".
 
-    Quem quer conversar de verdade chama sem argumento e recebe o modelo real.
+    `tools` e `system_prompt` existem porque o loop ReAct abaixo nao e exclusivo
+    da CLI. Um agente que atende pela WEB usa o mesmo grafo com outro conjunto
+    de ferramentas -- sem `write_file` e sem `run_maven`, que num servidor
+    atuariam no disco do container em vez do projeto de quem pergunta -- e com
+    outra persona. O que muda entre os dois e so isto: as ferramentas e o
+    prompt. A orquestracao e a mesma, e e por isso que ela nao foi duplicada.
+
+    Quem quer conversar de verdade chama sem argumento e recebe o modelo real,
+    as ferramentas da CLI e a persona da CLI.
     """
+    ferramentas = ALL_TOOLS if tools is None else tools
+    prompt = SYSTEM_PROMPT if system_prompt is None else system_prompt
 
     # O modelo, com as ferramentas "amarradas" a ele (assim ele sabe quais
     # existem e pode pedir para chama-las) e com o cache de prompt ligado.
     if llm_com_tools is None:
-        llm_com_tools = build_llm_com_tools(ALL_TOOLS)
+        llm_com_tools = build_llm_com_tools(ferramentas)
 
     def assistant(state: MessagesState) -> dict:
         """No do modelo: injeta o system prompt e chama o LLM."""
-        mensagens = [SystemMessage(content=SYSTEM_PROMPT), *state["messages"]]
+        mensagens = [SystemMessage(content=prompt), *state["messages"]]
         resposta = llm_com_tools.invoke(mensagens)
         return {"messages": [resposta]}
 
@@ -59,7 +69,7 @@ def build_graph(llm_com_tools=None):
     grafo = StateGraph(MessagesState)
 
     grafo.add_node("assistant", assistant)
-    grafo.add_node("tools", ToolNode(ALL_TOOLS))
+    grafo.add_node("tools", ToolNode(ferramentas))
 
     grafo.add_edge(START, "assistant")
     # tools_condition: se a ultima mensagem do assistant tiver tool_calls,

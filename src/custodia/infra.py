@@ -10,8 +10,8 @@ O fluxo
     START
       |
       v
-    app ou worker? ------ "app" ----------> END  (feature indisponivel)
-      | "worker"
+    worker, echobridge ou app? -- "app" --> END  (feature indisponivel)
+      |
       v
     quais ambientes? (dev/hom/prod)
       |
@@ -22,6 +22,9 @@ O fluxo
       v
     confirmar contas ---------- "nao" --------------> END (cancelado)
       |   mostra em que conta cada ambiente caiu
+      |
+      +-- "echobridge" --> o ramo de `echobridge.py`, ate o END
+      | "worker"
       v
     identidade da aplicacao (sigla, produto, squad, emails, ...)
       |
@@ -35,6 +38,12 @@ O fluxo
       | "sim"
       v
     escrever infra/terraform  ------------> END
+
+O comeco e COMPARTILHADO entre os dois ramos de proposito: escolher ambiente,
+conferir os perfis do ~/.aws e confirmar em que conta cada um caiu vale igual
+para worker e para echobridge, e ter duas copias disso significaria, um dia,
+corrigir so uma delas. A bifurcacao acontece depois da confirmacao das contas,
+que e o ultimo passo comum.
 
 Duas regras de construcao
 -------------------------
@@ -53,10 +62,11 @@ from typing import Any, Callable, TypedDict
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import interrupt
 
 from . import aws
+from . import echobridge
 from .dimensionamento import calcular
+from .echobridge import EchoBridgeState
 from .questions import (
     Q_AMBIENTES,
     Q_CONCORRENCIA,
@@ -81,14 +91,28 @@ from .questions import (
     Question,
     pergunta_confirmacao,
     pergunta_vazao,
-    validate,
 )
 from .terraform import Ambiente, escrever_infra
+from .wizard import (
+    STATUS_BLOQUEADO,
+    STATUS_CANCELADO,
+    STATUS_ERRO_AWS,
+    STATUS_ESCRITO,
+    com_aws,
+    escolher_ou_digitar as _escolher_ou_digitar,
+    perguntar as _perguntar,
+    rota_aws as _rota_aws,
+)
 
-STATUS_BLOQUEADO = "blocked"
-STATUS_CANCELADO = "cancelled"
-STATUS_ESCRITO = "written"
-STATUS_ERRO_AWS = "aws_error"
+__all__ = [
+    "STATUS_BLOQUEADO",
+    "STATUS_CANCELADO",
+    "STATUS_ERRO_AWS",
+    "STATUS_ESCRITO",
+    "InfraState",
+    "build_infra_graph",
+    "resumo",
+]
 
 # Cada par vira um no do grafo. A ordem aqui e a ordem das perguntas.
 PERGUNTAS_DA_APLICACAO: tuple[tuple[str, Question], ...] = (
@@ -111,7 +135,15 @@ PERGUNTAS_DA_APLICACAO: tuple[tuple[str, Question], ...] = (
 )
 
 
-class InfraState(TypedDict, total=False):
+class InfraState(EchoBridgeState, total=False):
+    """O estado do /infra INTEIRO -- os dois ramos.
+
+    Herda de `EchoBridgeState` porque o LangGraph tem um schema de estado por
+    grafo, e os dois ramos vivem no mesmo grafo. As chaves do comeco comum
+    (ambientes, contas, opcoes, atual, coletados) estao aqui; as que so o
+    echobridge usa ficam no TypedDict dele, junto dos nos que as escrevem.
+    """
+
     project_root: str
     sugestao_vazao: int          # vazao registrada na spec, se houver
 
@@ -136,56 +168,17 @@ class InfraState(TypedDict, total=False):
 # Auxiliares
 # ---------------------------------------------------------------------------
 
-def _perguntar(pergunta: Question) -> Any:
-    """Pausa o grafo, entrega a pergunta ao frontend e valida o que voltou."""
-    resposta = interrupt(pergunta.to_dict())
-    return validate(pergunta, resposta)
-
-
 def _ambiente_atual(state: InfraState) -> str:
     return state["ambientes"][state.get("indice", 0)]
 
 
-def _escolher_ou_digitar(
-    id_pergunta: str,
-    titulo: str,
-    opcoes: list[Option],
-    ajuda: str = "",
-    vazio: str = "",
-) -> Question:
-    """Vira uma lista quando a AWS devolveu opcoes; um campo de texto quando nao.
-
-    A consulta pode voltar vazia por motivo legitimo -- conta nova, ou o perfil
-    sem permissao de listar. Travar o wizard nesse caso seria pior do que
-    deixar o dev digitar o valor que ele ja conhece.
-    """
-    if opcoes:
-        return Question(
-            id=id_pergunta, kind="choice", title=titulo, help=ajuda, options=tuple(opcoes)
-        )
-    return Question(
-        id=id_pergunta,
-        kind="text",
-        title=titulo,
-        help=(ajuda + "\n" + vazio).strip(),
-    )
-
-
 def _com_aws(state: InfraState, tarefa: Callable[[str], dict[str, Any]]) -> dict[str, Any]:
-    """Roda uma consulta na AWS traduzindo a falha em fim de fluxo legivel."""
-    perfil = aws.perfil_do_ambiente(_ambiente_atual(state))
-    try:
-        return tarefa(perfil)
-    except aws.AwsIndisponivel as exc:
-        return {"status": STATUS_ERRO_AWS, "message": str(exc)}
+    """Roda uma consulta na AWS no perfil do ambiente que esta sendo configurado."""
+    return com_aws(_ambiente_atual(state), tarefa)
 
 
 def _rota_disponibilidade(state: InfraState) -> str:
     return "parar" if state.get("status") == STATUS_BLOQUEADO else "continuar"
-
-
-def _rota_aws(state: InfraState) -> str:
-    return "parar" if state.get("status") == STATUS_ERRO_AWS else "continuar"
 
 
 # ---------------------------------------------------------------------------
@@ -193,11 +186,11 @@ def _rota_aws(state: InfraState) -> str:
 # ---------------------------------------------------------------------------
 
 def no_tipo_projeto(state: InfraState) -> dict[str, Any]:
-    """Worker ou app? App ainda nao existe -- mesma regra do /initialize."""
-    from .questions import Q_TIPO_PROJETO
+    """Worker, echobridge ou app? App ainda nao existe -- como no /initialize."""
+    from .questions import Q_TIPO_INFRA
 
-    escolha = _perguntar(Q_TIPO_PROJETO)
-    opcao = Q_TIPO_PROJETO.option(escolha)
+    escolha = _perguntar(Q_TIPO_INFRA)
+    opcao = Q_TIPO_INFRA.option(escolha)
     if opcao is not None and not opcao.available:
         return {
             "project_type": escolha,
@@ -290,7 +283,10 @@ def no_confirmar_perfis(state: InfraState) -> dict[str, Any]:
 
 
 def _rota_confirmar_perfis(state: InfraState) -> str:
-    return "parar" if state.get("status") == STATUS_CANCELADO else "continuar"
+    """A bifurcacao: daqui em diante worker e echobridge nao tem nada em comum."""
+    if state.get("status") == STATUS_CANCELADO:
+        return "parar"
+    return state.get("project_type", "worker")
 
 
 def _no_de_pergunta(campo: str, pergunta: Question) -> Callable[[InfraState], dict[str, Any]]:
@@ -647,11 +643,19 @@ def build_infra_graph():
         _rota_aws,
         {"continuar": "confirmar_perfis", "parar": END},
     )
+    # O ramo do echobridge se registra sozinho e diz por onde comeca; o /infra
+    # so precisa saber ligar a bifurcacao nele.
+    entrada_echobridge = echobridge.registrar(grafo, _rota_aws)
+
     primeiro_campo = PERGUNTAS_DA_APLICACAO[0][0]
     grafo.add_conditional_edges(
         "confirmar_perfis",
         _rota_confirmar_perfis,
-        {"continuar": f"app_{primeiro_campo}", "parar": END},
+        {
+            "worker": f"app_{primeiro_campo}",
+            "echobridge": entrada_echobridge,
+            "parar": END,
+        },
     )
 
     # As perguntas da aplicacao sao uma fila reta.

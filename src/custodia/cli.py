@@ -35,6 +35,8 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from langgraph.types import Command
+from rich import box
+from rich.console import Group
 from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
@@ -59,7 +61,7 @@ from .configurar import (
     planejar_env,
 )
 from .conhecimento import esta_configurada
-from .llm import descrever_llm
+from .llm import descrever_llm, modelo_atual, provedor_atual
 from .initialize import (
     STATUS_BLOQUEADO,
     STATUS_CANCELADO,
@@ -78,7 +80,18 @@ from .grafos import GRAFOS, destino, exportar, mermaid
 from .questions import Q_DEPENDENCIAS, Question
 from .spec import SpecError, load_spec, spec_path
 from .terraform import InfraNaoEncontrada, localizar_infra
-from .ui import LARGURA, WizardAbortado, console, perguntar_no_terminal, titulo
+from .ui import (
+    LARANJA,
+    LARANJA_CLARO,
+    LARGURA,
+    TINTA_FRACA,
+    WizardAbortado,
+    console,
+    logotipo,
+    perguntar_no_terminal,
+    regua,
+    titulo,
+)
 
 VERSAO = __version__
 # Assinatura gravada no campo `generated_by` da spec.
@@ -367,7 +380,7 @@ def _nota_de_fluxo_deterministico() -> None:
 
 
 def cmd_infra(root: Path) -> bool:
-    """Configura o terraform do worker, um ambiente por vez."""
+    """Configura o terraform (worker ou EchoBridge), um ambiente por vez."""
     titulo("/infra - configuracao da infraestrutura")
 
     # Falhar aqui e melhor do que falhar depois de dezenas de perguntas.
@@ -422,10 +435,26 @@ def _relatar_infra(estado: dict[str, Any]) -> None:
         console.print(f"\n[green]Infra escrita.[/green] {len(escritos)} arquivo(s):\n")
         for caminho in escritos:
             console.print(f"  [dim]{escape(caminho)}[/dim]")
-        console.print(
-            "\n[dim]Proximo passo: revise o diff e rode o terraform "
-            "com o profile do ambiente.[/dim]\n"
-        )
+
+        # O ramo do echobridge tambem APAGA -- as sobras do template de worker
+        # que o modulo dele nao usa. Uma remocao confirmada tem de aparecer no
+        # relatorio; senao o dev descobre pelo `git status`.
+        removidos = estado.get("removidos", [])
+        if removidos:
+            console.print(f"\n[yellow]Removidos[/yellow] {len(removidos)} caminho(s):\n")
+            for caminho in removidos:
+                console.print(f"  [dim]{escape(caminho)}[/dim]")
+
+        # Mensagem de varias linhas e um bloco de proximos passos proprio do
+        # ramo; a de uma linha e so o "Infra escrita." generico.
+        if "\n" in mensagem:
+            console.print()
+            console.print(f"[dim]{escape(mensagem)}[/dim]\n")
+        else:
+            console.print(
+                "\n[dim]Proximo passo: revise o diff e rode o terraform "
+                "com o profile do ambiente.[/dim]\n"
+            )
         return
 
     if status == STATUS_ERRO_AWS:
@@ -581,7 +610,7 @@ _COMANDOS_UNICOS: tuple[Comando, ...] = (
     ),
     Comando(
         "/infra",
-        "Configura o terraform do worker (dev/hom/prod) consultando a AWS.",
+        "Configura o terraform -- worker ou EchoBridge -- consultando a AWS.",
         cmd_infra,
     ),
     Comando(
@@ -639,19 +668,56 @@ def _relatar_resultado(estado: dict[str, Any]) -> None:
 # O loop do REPL
 # ---------------------------------------------------------------------------
 
+def _modelo_do_banner() -> str:
+    """Quem vai responder, em uma linha -- ou o empurrao para configurar.
+
+    Vale a linha extra na abertura: falar com o modelo errado (ou com nenhum)
+    e o tropeco classico da primeira instalacao, e ele so aparecia depois, no
+    /status ou no meio de uma resposta estranha.
+
+    Versao curta de proposito -- o `descrever_llm()` do /status traz rotulo
+    longo e base_url, e uma linha dessas esticaria o painel bem alem da marca.
+    """
+    try:
+        provedor = provedor_atual()
+        partes = [provedor.nome, modelo_atual()]
+        # Para qual ambiente o gateway aponta muda a resposta: cabe aqui.
+        if provedor.nome == "iara":
+            partes.append(config.IARA_ENVIRONMENT)
+        return "  ·  ".join(partes)
+    except Exception:  # pragma: no cover - banner nunca derruba a CLI
+        return "nao configurado -- rode /config"
+
+
 def _banner(root: Path) -> None:
-    cabecalho = Text()
-    cabecalho.append(f"{NOME} ", style="bold cyan")
-    cabecalho.append(VERSAO, style="dim")
-    cabecalho.append("\nAgente da custodia de ativos PF", style="white")
-    cabecalho.append("\n\nProjeto  ", style="dim")
-    cabecalho.append(str(root))
+    marca, largura = logotipo(NOME)
+
+    assinatura = Text()
+    assinatura.append("agente da custodia de ativos PF", style="#d8d8d8")
+    assinatura.append("  ·  ", style=TINTA_FRACA)
+    assinatura.append(VERSAO, style=LARANJA_CLARO)
+
+    # Grid em vez de texto solto: os rotulos ficam numa coluna so, entao os
+    # valores alinham entre si por mais que os rotulos mudem de tamanho.
+    ficha = Table.grid(padding=(0, 2))
+    ficha.add_column(style=TINTA_FRACA, no_wrap=True)
+    ficha.add_column(overflow="fold")
+    ficha.add_row("projeto", str(root))
+    ficha.add_row("modelo", _modelo_do_banner())
 
     console.print()
-    console.print(Panel(cabecalho, border_style="cyan", padding=(1, 3), expand=False))
     console.print(
-        "[dim]Pergunte qualquer coisa, ou digite[/dim] [bold]/help[/bold] "
-        "[dim]para ver os comandos.[/dim]"
+        Panel(
+            Group(marca, Text(), assinatura, regua(largura), ficha),
+            box=box.ROUNDED,
+            border_style=LARANJA,
+            padding=(1, 3),
+            expand=False,
+        )
+    )
+    console.print(
+        f"[{LARANJA_CLARO}]▸[/] [dim]pergunte qualquer coisa, ou digite[/dim] "
+        "[bold]/help[/bold] [dim]para ver os comandos.[/dim]"
     )
 
 

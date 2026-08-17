@@ -17,7 +17,7 @@ Construído com **LangGraph** sobre **Claude** — dois modos no mesmo shell: a 
 |---|---|---|
 | *(texto solto)* ou `/chat` | Conversa: dúvidas e alterações no código | ✅ disponível |
 | `/initialize` | Pergunta o tipo do projeto e grava a spec | ✅ disponível |
-| `/infra` | Escreve o Terraform do worker (dev/hom/prod) consultando a AWS | ✅ disponível |
+| `/infra` | Escreve o Terraform — **worker** ou **EchoBridge** — consultando a AWS | ✅ disponível |
 | `/grafo` | Desenha os grafos do agente (Mermaid) a partir do código | ✅ disponível |
 | `/status` | Mostra a spec já salva no projeto | ✅ disponível |
 | `/help`, `/exit` | Ajuda e saída | ✅ disponível |
@@ -298,8 +298,18 @@ feature indisponível, não deixa rastro no projeto.
 
 ## O `/infra`
 
-Escreve o Terraform do worker no `infra/terraform/` do seu projeto, um ambiente por
-vez, oferecendo **opções reais da sua conta AWS** em vez de pedir você digitar IDs.
+Escreve o Terraform no `infra/terraform/` do seu projeto, um ambiente por vez,
+oferecendo **opções reais da sua conta AWS** em vez de pedir você digitar IDs.
+
+São dois tipos de projeto, escolhidos na primeira pergunta:
+
+| Tipo | O que é | O que ele escreve |
+|---|---|---|
+| **Worker** | Serviço ECS próprio que consome uma fila SQS. Tem código, imagem e IAM no repositório. | `infra/terraform/**` a partir do template do worker |
+| **EchoBridge** | Connector **pronto** que consome tópicos Kafka e publica em SNS ou SQS. Não há código no repositório — só o módulo. | `infra/terraform/**` + `.iupipes.yml`, e **remove** as sobras do template de worker |
+
+O começo é o mesmo para os dois — escolher ambientes, conferir os profiles do `~/.aws`
+e confirmar em que conta cada um caiu. A bifurcação acontece só depois disso.
 
 **Pré-requisito:** três profiles no `~/.aws` (em `config` ou `credentials`), um por
 ambiente — `CUSTODIA-AI-DEV`, `CUSTODIA-AI-HOM`, `CUSTODIA-AI-PROD`. O agente usa a
@@ -321,14 +331,32 @@ região errada".
 
 ```
 /infra
- ├─ app ou worker?                 app encerra: ainda não disponível
+ ├─ worker, EchoBridge ou app?     app encerra: ainda não disponível
  ├─ quais ambientes?               dev, hom, prod (uma ou várias)
  ├─ confere TODOS os perfis        antes de qualquer outra pergunta
  ├─ confirma as contas             mostra em que conta cada ambiente caiu
- ├─ identidade da aplicação        sigla, produto, squad, e-mails, tags de FinOps…
- └─ por ambiente:                  cluster ECS, VPC, subnets, CIDRs, filas SQS,
-                                   vazão, URLs do STS
+ │
+ ├─ [worker]     identidade da aplicação   sigla, produto, squad, e-mails, FinOps…
+ │               por ambiente:             cluster ECS, VPC, subnets, CIDRs,
+ │                                         filas SQS, vazão, URLs do STS
+ │
+ └─ [EchoBridge] identidade do connector   comunidade, sigla, squad, e-mails,
+                                           repositório, secret do kcert
+                 o que ele faz             destino SNS/SQS, transforma?, filtra?
+                 por tópico Kafka:         nome, broker, schema, filtro,
+                                           mapeamento do payload
+                 por ambiente:             cluster ECS, perfil de recursos, VPC,
+                                           subnets, CIDRs, security group,
+                                           client/group id, bootstrap servers,
+                                           └─ partições de cada tópico
+                                           ARN do destino, log
 ```
+
+O ciclo das partições é um ciclo **dentro** do ciclo de ambientes: o mesmo tópico tem
+contagens diferentes em dev e em produção, então cada ambiente pergunta as partições de
+cada tópico, uma pergunta por vez e com o nome do tópico no enunciado. Elas aparecem
+lado a lado na revisão final, para dar para ver de relance se produção ficou com a
+contagem de dev.
 
 ### A conferência dos perfis
 
@@ -384,12 +412,76 @@ Tempo de processamento e concorrência são propriedades do **código** e por is
 perguntados uma vez só; a **vazão** é perguntada por ambiente, porque dev e produção
 não recebem a mesma carga. A revisão final mostra a conta inteira antes de gravar.
 
-### O que ele escreve
+### O que ele escreve (worker)
 
 Tudo dentro de `infra/terraform/` — e só ali; há uma barreira em código que bloqueia
 qualquer escrita fora dessa pasta. Os `.tf` vêm do template do worker que viaja dentro
 do pacote, com `data.tf` e `locals.tf` preenchidos, e um `terraform.tfvars` por
 ambiente escolhido. **Ambiente que você não escolheu não é tocado.**
+
+## O `/infra` do EchoBridge
+
+O EchoBridge é um connector pronto: o repositório do time não tem código Java, tem um
+módulo Terraform apontado para `itau-hn8-modules-ecs-echobridge`. Configurar o projeto
+é preencher as variáveis desse módulo sem errar nenhuma — e é exatamente isso que o
+wizard faz.
+
+O projeto chega no formato de worker (`iamsr.tf`, as policies, um `main.tf` de serviço
+próprio) e precisa virar outra coisa. O wizard faz os três movimentos:
+
+1. **troca** o Terraform do worker pelo do connector — `main.tf`, `variables.tf`,
+   `outputs.tf`, `provider.tf` e `data.tf` são sempre iguais, porque quem decide o que
+   existe é o módulo;
+2. **escreve** o que muda de projeto para projeto — `locals.tf` (identidade, filtros,
+   transformação), `inventories/<ambiente>/terraform.tfvars`,
+   `mappers/sink_transformation.json` e o `.iupipes.yml` da esteira;
+3. **remove** o que sobrou do worker (`iamsr.tf` e `iamsr/`), que o módulo não usa e
+   que, deixado para trás, faz o `terraform plan` tentar criar roles órfãs. A remoção é
+   listada arquivo por arquivo na confirmação final — nada some sem você ver.
+
+### As respostas compactas
+
+Filtro de evento e transformação de payload são estruturas aninhadas. Perguntar campo a
+campo daria dezenas de perguntas por tópico, então duas delas aceitam uma linha só:
+
+```
+filtro por header    sigla_sistema = EP9; SF
+mapeamento           "CD" > $.origem ; $.data.sigla_sistema > $.sigla_sistema
+```
+
+No mapeamento, origem entre aspas vira constante (`additionalTransform.constant`) e
+origem com `$.` vira cópia de campo — as duas únicas formas que o módulo aceita. O
+formato é validado por regex **antes** de o grafo receber a resposta, como qualquer
+outra pergunta do catálogo.
+
+### O que é sugerido, e o que não é
+
+Vários campos seguem convenção. Onde há convenção, o wizard **sugere e o enter aceita**;
+onde não há, ele pergunta e não chuta:
+
+| Campo | De onde vem a sugestão |
+|---|---|
+| `github_repo_id` | `itau-corp/<nome da pasta do projeto>` |
+| `sink_kafka_client_id` | `<sigla>-echobridge-consumer-<ambiente>` |
+| `sink_kafka_group_id` | `<sigla>-echobridge-itau-<context>-<ambiente>` |
+| versão do módulo e tag da imagem | a última conhecida, com o link das releases |
+| retenção de log | 3 dias em dev, 7 em hom, 30 em prod |
+
+As **partições ficam de fora dessa lista de propósito**: elas mudam por ambiente e são
+perguntadas uma a uma, sem carregar o valor do ambiente anterior. Um enter distraído
+colocaria a contagem de dev no `tfvars` de produção — que é exatamente o erro que a
+pergunta existe para evitar.
+
+E duas coisas são **derivadas**, não perguntadas, porque são formato fixo da AWS e não
+opinião: o ARN de uma fila SQS (`arn:aws:sqs:<região>:<conta>:<nome>`, com conta e
+região vindas do `get-caller-identity` do mesmo profile) e o `sink_messaging_fifo`, que
+é simplesmente "o ARN escolhido termina em `.fifo`".
+
+### O que ele *não* escreve
+
+O `CODEOWNERS` não é gerado — quem são os donos do repositório não dá para deduzir de
+nada que o wizard perguntou, e inventar isso é pior do que não escrever. O relatório
+final lembra de criá-lo.
 
 ### O que sai no final
 
@@ -441,8 +533,11 @@ src/custodia/
 ├── config.py       raiz do projeto + barreira de segurança de caminhos
 │
 ├── infra.py        ┐  o /infra: grafo determinístico, AWS e escrita do
-├── aws.py          ├─ terraform. `templates/worker/` guarda os .tf que
-├── terraform.py    │  viajam dentro da wheel.
+├── aws.py          │  terraform. O grafo tem dois ramos com o mesmo começo.
+├── wizard.py       ├─ `templates/worker/` e `templates/echobridge/` guardam
+├── terraform.py    │  os .tf que viajam dentro da wheel.
+├── echobridge.py   │
+├── echobridge_tf.py│
 ├── dimensionamento.py ┘  a fórmula do autoscaling, isolada e testável
 │
 ├── custos.py       o Cost Explorer pela CLI: quanto a conta gastou e o que

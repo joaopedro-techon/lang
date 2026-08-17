@@ -89,7 +89,10 @@ class Question:
 
     # choice / multi_choice
     options: tuple[Option, ...] = ()
-    allow_empty: bool = False  # multi_choice pode terminar sem nada marcado?
+    # multi_choice: pode terminar sem nada marcado?
+    # text: enter vazio e uma resposta valida (devolve "")? Serve para os campos
+    # que tem sugestao -- o no aceita o branco e usa o valor sugerido no `help`.
+    allow_empty: bool = False
 
     # text
     pattern: str | None = None
@@ -202,6 +205,8 @@ def _validar_texto(pergunta: Question, valor: Any) -> str:
         raise ValidationError("Esperava um texto.")
     texto = valor.strip()
     if not texto:
+        if pergunta.allow_empty:
+            return ""
         raise ValidationError("Nao pode ficar em branco.")
     if pergunta.pattern and not re.fullmatch(pergunta.pattern, texto):
         raise ValidationError(pergunta.pattern_help or f"Formato invalido: '{texto}'.")
@@ -333,6 +338,34 @@ Q_DEPENDENCIAS = Question(
 
 _EMAIL = r"[^@\s]+@[^@\s]+\.[^@\s]+"
 _NOME_RECURSO = r"[a-z0-9][a-z0-9-]{1,39}"
+
+# O /infra tem um catalogo de tipos PROPRIO, separado do /initialize de
+# proposito: o EchoBridge nao tem spec nem codigo para gerar -- ele so tem
+# infra. Oferece-lo no /initialize prometeria um passo que nao existe.
+Q_TIPO_INFRA = Question(
+    id="project_type",
+    kind="choice",
+    title="Que tipo de infra voce vai configurar?",
+    options=(
+        Option(
+            value="worker",
+            label="Worker",
+            description="Servico ECS proprio que consome uma fila SQS. Tem codigo, imagem e IAM no repositorio.",
+        ),
+        Option(
+            value="echobridge",
+            label="EchoBridge",
+            description="Connector pronto que consome topicos Kafka e publica em SNS ou SQS. So infra: nao ha codigo no repositorio.",
+        ),
+        Option(
+            value="app",
+            label="App",
+            description="Expoe uma API REST atras de um load balancer.",
+            available=False,
+            note="O tipo 'App' (API REST com load balancer) ainda nao esta disponivel neste agente.",
+        ),
+    ),
+)
 
 Q_AMBIENTES = Question(
     id="ambientes",
@@ -508,6 +541,292 @@ def pergunta_vazao(ambiente: str, sugestao: int | None) -> Question:
         help=ajuda,
         min_value=1,
         max_value=100_000,
+    )
+
+
+# ---------------------------------------------------------------------------
+# As perguntas do /infra -- ramo EchoBridge
+# ---------------------------------------------------------------------------
+#
+# O EchoBridge nao e um worker: nao ha codigo Java no repositorio, nao ha
+# imagem propria e nao ha IAM escrito a mao. O que existe e UM modulo terraform
+# (`itau-hn8-modules-ecs-echobridge`) que sobe um connector pronto -- ele
+# consome topicos Kafka e publica em SNS ou SQS. Configurar o projeto e, na
+# pratica, preencher as variaveis desse modulo sem errar nenhuma.
+#
+# Por isso as perguntas daqui sao mais "de dominio" que as do worker: broker,
+# particao, filtro de evento, transformacao de payload. Cada uma corresponde a
+# um campo que o README do modulo marca como obrigatorio.
+
+# O que o modulo aceita em `condition`, dentro de body/clazz/header.
+CONDICOES_FILTRO: tuple[str, ...] = (
+    "contains",
+    "containsIgnoreCase",
+    "lessThan",
+    "lessThanOrEquals",
+    "greaterThan",
+    "greaterThanOrEquals",
+    "startWith",
+    "endWith",
+    "notContains",
+    "notContainsIgnoreCase",
+    "notLessThan",
+    "notLessThanOrEquals",
+    "notGreaterThan",
+    "notGreaterThanOrEquals",
+    "notStartWith",
+    "notEndWith",
+)
+
+# Perfis de recurso do `sink_task_profile_compute_config`, com a capacidade que
+# o README publica. O RPS entra na descricao porque escolher o perfil e, no
+# fundo, responder "quanta vazao este connector precisa aguentar" -- e sem o
+# numero a lista vira quatro nomes sem significado.
+PERFIS_COMPUTE: tuple[tuple[str, str, str], ...] = (
+    (
+        "MINIMUM_RESOURCE",
+        "MINIMUM_RESOURCE",
+        "0,5 vCPU · 1 GB · metaspace 128m · G1GC · paralelismo 1 · ate ~50 RPS (3 particoes)",
+    ),
+    (
+        "MEDIUM_RESOURCE",
+        "MEDIUM_RESOURCE",
+        "1 vCPU · 2 GB · metaspace 256m · G1GC · paralelismo 1 · ate ~330 RPS (3 particoes)",
+    ),
+    (
+        "LARGE_RESOURCE",
+        "LARGE_RESOURCE",
+        "2 vCPU · 4 GB · metaspace 512m · G1GC · paralelismo 2 · ate ~700 RPS (3 particoes)",
+    ),
+    (
+        "CUSTOM_PROFILE",
+        "CUSTOM_PROFILE",
+        "Perfil customizado -- exige preencher os recursos a mao no tfvars depois.",
+    ),
+)
+
+# Versoes de referencia. Sao SUGESTOES mostradas no enunciado, nunca assumidas:
+# o modulo e a imagem evoluem, e chutar a versao errada quebra o terraform de
+# um jeito que so aparece no pipeline.
+MODULO_ECHOBRIDGE = "itau-corp/itau-hn8-modules-ecs-echobridge"
+MODULO_REF_SUGERIDA = "v0.22.0"
+IMAGEM_ECHOBRIDGE = (
+    "itau-hn8-docker.artifactory.prod.aws.cloud.ihf/"
+    "itau-corp-itau-hn8-container-kafka-sink-to-amazon-message-services"
+)
+IMAGEM_TAG_SUGERIDA = "v0.18.3-c0eaade"
+
+Q_EB_COMUNIDADE = Question(
+    id="comunidade",
+    kind="choice",
+    title="Qual a comunidade dona do connector?",
+    help="Vai para o local `sink_comunidade`.",
+    options=(
+        Option("Custodia de Ativos", "Custodia de Ativos"),
+        Option("__outro__", "Outra -- quero digitar", "Abre um campo de texto livre."),
+    ),
+)
+
+Q_EB_COMUNIDADE_TEXTO = Question(
+    id="comunidade_texto",
+    kind="text",
+    title="Qual o nome da comunidade?",
+)
+
+Q_EB_FINALIDADE = Question(
+    id="finalidade",
+    kind="choice",
+    title="Qual a finalidade do projeto?",
+    help="Vira a tag `finalidade` em todos os recursos.",
+    options=(
+        Option("modernizacao", "modernizacao", "Reescrita/migracao de algo que ja existe."),
+        Option("sustentacao", "sustentacao", "Manutencao do que ja esta em producao."),
+        Option("novo-negocio", "novo-negocio", "Capacidade nova."),
+        Option("__outro__", "Outra -- quero digitar", "Abre um campo de texto livre."),
+    ),
+)
+
+Q_EB_FINALIDADE_TEXTO = Question(
+    id="finalidade_texto",
+    kind="text",
+    title="Qual a finalidade?",
+    pattern=r"[A-Za-z0-9 _-]{2,40}",
+    pattern_help="Letras, numeros, espaco, hifen e underscore, de 2 a 40 caracteres.",
+)
+
+Q_EB_EMPRESA = Question(
+    id="empresa",
+    kind="text",
+    title="Qual o codigo da empresa, para o rateio de FinOps?",
+    help="Tag `iu:finops:alocacao:empresa`. Enter aceita 341 (Itau Unibanco).",
+    allow_empty=True,
+    pattern=r"[0-9]{3,5}",
+    pattern_help="Somente numeros, de 3 a 5 digitos. Ex.: 341",
+)
+
+Q_EB_PRODUTO_FINOPS = Question(
+    id="produto_finops",
+    kind="text",
+    title="Qual o produto, para o rateio de FinOps?",
+    help="Tag `iu:finops:alocacao:produto`. Ex.: acionar_e_Receber",
+    pattern=r"[A-Za-z0-9_-]{2,40}",
+    pattern_help="Letras, numeros, hifen e underscore, de 2 a 40 caracteres.",
+)
+
+Q_EB_DESTINO = Question(
+    id="destino",
+    kind="choice",
+    title="Para onde o connector publica a mensagem?",
+    help="Vai para o local `sink_messaging_service.type`.",
+    options=(
+        Option("SNS", "SNS", "Publica num topico -- varios assinantes recebem."),
+        Option("SQS", "SQS", "Enfileira numa fila -- um consumidor por mensagem."),
+    ),
+)
+
+Q_EB_TRANSFORMACAO = Question(
+    id="usa_transformacao",
+    kind="confirm",
+    title="O payload precisa ser transformado antes de publicar?",
+    help=(
+        "Se sim, cada topico ganha um mapeamento em mappers/sink_transformation.json\n"
+        "(renomear campos, achatar o envelope, injetar constantes).\n"
+        "Se nao, a mensagem sai do Kafka e entra no destino como veio."
+    ),
+)
+
+Q_EB_FILTRO = Question(
+    id="usa_filtro",
+    kind="confirm",
+    title="O connector deve descartar parte dos eventos?",
+    help=(
+        "Se nao, TODO evento dos topicos escolhidos e publicado no destino.\n"
+        "Se sim, cada topico pode ganhar um filtro por header, classe ou corpo."
+    ),
+)
+
+Q_EB_QTD_TOPICOS = Question(
+    id="qtd_topicos",
+    kind="integer",
+    title="Quantos topicos Kafka este connector vai consumir?",
+    help="Cada um sera perguntado separadamente, um de cada vez.",
+    min_value=1,
+    max_value=20,
+)
+
+Q_EB_QTD_BROKERS = Question(
+    id="qtd_brokers",
+    kind="integer",
+    title="Quantos clusters Kafka (bootstrap_servers) diferentes esses topicos usam?",
+    help=(
+        "Quase sempre 1. So passa disso quando os topicos vivem em brokers\n"
+        "distintos -- o modulo agrupa os topicos por broker no tfvars."
+    ),
+    min_value=1,
+    max_value=5,
+)
+
+Q_EB_MODULO_REF = Question(
+    id="module_ref",
+    kind="text",
+    title="Qual a versao (tag) do modulo terraform do EchoBridge?",
+    help=(
+        f"Confira as releases em https://github.com/{MODULO_ECHOBRIDGE}\n"
+        f"Enter aceita {MODULO_REF_SUGERIDA}."
+    ),
+    allow_empty=True,
+    pattern=r"v?[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9.-]*",
+    pattern_help="Use o formato da tag do repositorio. Ex.: v0.22.0",
+)
+
+Q_EB_IMAGEM_TAG = Question(
+    id="image_tag",
+    kind="text",
+    title="Qual a tag da imagem do connector (a que o .iupipes.yml publica)?",
+    help=(
+        f"Imagem: {IMAGEM_ECHOBRIDGE}\n"
+        f"Enter aceita {IMAGEM_TAG_SUGERIDA}."
+    ),
+    allow_empty=True,
+    pattern=r"[A-Za-z0-9][A-Za-z0-9._-]{0,60}",
+    pattern_help="Use a tag publicada no Artifactory. Ex.: v0.18.3-c0eaade",
+)
+
+Q_EB_TOPICO_SCHEMA = Question(
+    id="topico_schema",
+    kind="choice",
+    title="Este topico tem schema governado?",
+    help=(
+        "Governado vai para `sink_schema_topics_properties`; sem schema vai\n"
+        "para `sink_schema_less_topics_properties`. O modulo trata os dois\n"
+        "de forma diferente na desserializacao."
+    ),
+    options=(
+        Option("governado", "Com schema governado", "Registrado no schema registry."),
+        Option("sem", "Sem schema", "JSON solto, sem contrato registrado."),
+    ),
+)
+
+Q_EB_LOG_LEVEL = Question(
+    id="log_level",
+    kind="choice",
+    title="Qual o nivel de log neste ambiente?",
+    options=(
+        Option("INFO", "INFO", "O padrao. Use em dev e hom."),
+        Option("WARN", "WARN", "So avisos e erros."),
+        Option("ERROR", "ERROR", "So erros. Barato, mas cega o diagnostico."),
+    ),
+)
+
+
+def pergunta_texto_com_sugestao(
+    id_pergunta: str,
+    titulo: str,
+    sugestao: str,
+    ajuda: str = "",
+    pattern: str | None = None,
+    pattern_help: str = "",
+) -> Question:
+    """Campo de texto em que o enter aceita a sugestao.
+
+    O EchoBridge tem varios campos cujo valor segue uma convencao (o client_id
+    do Kafka, o nome do repositorio, o group_id). Perguntar sem sugerir faria o
+    dev digitar a convencao de cabeca -- e errar o sufixo do ambiente uma vez
+    em tres. Perguntar com sugestao e ACEITAR o branco resolve os dois lados:
+    quem segue a convencao aperta enter, quem tem um caso diferente digita.
+    """
+    linhas = [ajuda] if ajuda else []
+    linhas.append(f"Enter aceita: {sugestao}")
+    return Question(
+        id=id_pergunta,
+        kind="text",
+        title=titulo,
+        help="\n".join(linhas),
+        allow_empty=True,
+        pattern=pattern,
+        pattern_help=pattern_help,
+    )
+
+
+def pergunta_condicao(id_pergunta: str, titulo: str, ajuda: str = "") -> Question:
+    """Escolha de `condition` para um criterio de filtro."""
+    return Question(
+        id=id_pergunta,
+        kind="choice",
+        title=titulo,
+        help=ajuda or "O modulo compara o valor do evento com os valores do filtro.",
+        options=tuple(Option(c, c) for c in CONDICOES_FILTRO),
+    )
+
+
+def pergunta_perfil_compute(ambiente: str) -> Question:
+    """Perfil de vCPU/memoria da task, naquele ambiente."""
+    return Question(
+        id=f"profile_{ambiente}",
+        kind="choice",
+        title=f"[{ambiente}] Qual o perfil de recursos da task?",
+        help="Vai para `profile` no tfvars, dentro de sink_task_profile_compute_config.",
+        options=tuple(Option(v, r, d) for v, r, d in PERFIS_COMPUTE),
     )
 
 

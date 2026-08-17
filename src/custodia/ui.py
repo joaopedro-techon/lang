@@ -28,6 +28,7 @@ from typing import Any
 
 from rich.console import Console
 from rich.markup import escape
+from rich.text import Text
 
 from .questions import Option, Question, ValidationError, validate
 
@@ -450,6 +451,112 @@ def _converter_confirmacao(texto: str) -> bool:
     if resposta in _NAO:
         return False
     raise ValidationError("Responda 's' para sim ou 'n' para nao.")
+
+
+# ---------------------------------------------------------------------------
+# Identidade visual: a marca em blocos e o degrade laranja
+# ---------------------------------------------------------------------------
+
+# As tres paradas do degrade, do vermelho-brasa ao ambar. O degrade corre na
+# HORIZONTAL: a cor depende so da coluna, entao as tres linhas da marca ficam
+# tintas iguais e a palavra e lida como um bloco so, nao como tres faixas.
+_PARADAS = ((255, 61, 0), (255, 138, 0), (255, 200, 64))
+
+# Tons derivados, para quem so precisa de uma cor chapada perto da marca.
+LARANJA = "#ff6a00"
+LARANJA_CLARO = "#ffa227"
+TINTA_FRACA = "#6e6e6e"
+
+# A fonte da marca: 3 linhas por caractere, hastes de 2 colunas. Escrita com
+# '#', '^' e 'v' porque em ASCII da para ver o desenho aqui no fonte -- a
+# traducao para os blocos de verdade acontece em `_BLOCOS`.
+_GLIFOS: dict[str, tuple[str, str, str]] = {
+    "C": ("##^^^^", "##    ", "##vvvv"),
+    "U": ("##  ##", "##  ##", "##vv##"),
+    "S": ("##^^^^", "^^^^##", "vvvv##"),
+    "T": ("^^^^^^", "  ##  ", "  ##  "),
+    "O": ("##^^##", "##  ##", "##vv##"),
+    "D": ("##^^v", "##  #", "##vv^"),
+    "I": ("##", "##", "##"),
+    "A": ("##^^##", "##^^##", "##  ##"),
+    ".": ("  ", "  ", "vv"),
+}
+
+# FULL BLOCK / UPPER HALF BLOCK / LOWER HALF BLOCK.
+_BLOCOS = str.maketrans({"#": "█", "^": "▀", "v": "▄"})
+
+# O caractere da regua sob a marca (BOX DRAWINGS HEAVY HORIZONTAL).
+_REGUA = "━"
+
+
+def _tinta(posicao: float) -> str:
+    """A cor do degrade em `posicao` (0.0 na esquerda, 1.0 na direita)."""
+    if posicao <= 0:
+        r, g, b = _PARADAS[0]
+    elif posicao >= 1:
+        r, g, b = _PARADAS[-1]
+    else:
+        # Em qual trecho entre duas paradas caimos, e o quanto andamos nele.
+        escala = posicao * (len(_PARADAS) - 1)
+        trecho = int(escala)
+        avanco = escala - trecho
+        inicio, fim = _PARADAS[trecho], _PARADAS[trecho + 1]
+        r, g, b = (round(a + (z - a) * avanco) for a, z in zip(inicio, fim))
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def _tem_blocos() -> bool:
+    """O terminal consegue escrever os meio-blocos, ou vai virar '?'?
+
+    Acontece de verdade no Windows quando o console esta num codepage
+    legado e o `configurar_saida_utf8` nao pegou: sem esta checagem a marca
+    sairia como uma fileira de interrogacoes.
+    """
+    codificacao = getattr(sys.stdout, "encoding", None) or "ascii"
+    try:
+        "█▀▄".encode(codificacao)
+    except (LookupError, UnicodeEncodeError):
+        return False
+    return True
+
+
+def logotipo(palavra: str) -> tuple[Text, int]:
+    """A marca desenhada em blocos, ja tinta com o degrade.
+
+    Devolve o texto e a largura em colunas -- quem chama usa a largura para
+    alinhar a regua e o resto do painel com a palavra, sem chutar numero.
+
+    Num terminal que nao aguenta os blocos, cai para a palavra espacada
+    (`C U S T O D . I A`), que perde o volume mas mantem o degrade.
+    """
+    palavra = palavra.upper()
+
+    if not _tem_blocos() or any(letra not in _GLIFOS for letra in palavra):
+        linhas = [" ".join(palavra)]
+    else:
+        linhas = ["", "", ""]
+        for letra in palavra:
+            glifo = _GLIFOS[letra]
+            for indice in range(3):
+                linhas[indice] += glifo[indice] + " "
+        linhas = [linha.rstrip().translate(_BLOCOS) for linha in linhas]
+
+    largura = max(len(linha) for linha in linhas)
+    marca = Text()
+    for numero, linha in enumerate(linhas):
+        if numero:
+            marca.append("\n")
+        for coluna, caractere in enumerate(linha):
+            marca.append(caractere, style=_tinta(coluna / max(largura - 1, 1)))
+    return marca, largura
+
+
+def regua(largura: int) -> Text:
+    """Um filete no mesmo degrade, para fechar a marca por baixo."""
+    linha = Text()
+    for coluna in range(largura):
+        linha.append(_REGUA, style=_tinta(coluna / max(largura - 1, 1)))
+    return linha
 
 
 # ---------------------------------------------------------------------------

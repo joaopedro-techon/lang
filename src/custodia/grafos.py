@@ -90,7 +90,10 @@ GRAFOS: tuple[Grafo, ...] = (
         rotulo="/infra",
         usa_llm=False,
         construtor=build_infra_graph,
-        nota="Terraform por ambiente. O ciclo repete as perguntas para dev, hom e prod.",
+        nota=(
+            "Dois ramos com o mesmo comeco: worker e EchoBridge. Os ciclos repetem "
+            "as perguntas por ambiente (e, no EchoBridge, tambem por topico Kafka)."
+        ),
     ),
 )
 

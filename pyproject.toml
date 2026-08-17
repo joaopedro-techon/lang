@@ -37,7 +37,7 @@ dependencies = [
     # indice interno") o install resolve liso; FORA da rede da empresa o pip
     # falha nesta linha -- ali use `pip install -e . --no-deps` e instale o
     # resto pelo requirements.txt.
-    "iaragenai",
+    #"iaragenai",
 ]
 
 # Cria o executavel `custodia` no PATH ao rodar `pip install custodia-cli`
@@ -70,6 +70,7 @@ custodia = [
     "templates/worker/terraform/*.tf",
     "templates/worker/terraform/iamsr/policy/*.json",
     "templates/worker/terraform/iamsr/trust/*.json",
+    "templates/echobridge/terraform/*.tf",
 ]
 
 # Versao vem de src/custodia/__init__.py -- fonte unica.
